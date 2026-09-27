@@ -370,6 +370,23 @@ func readsAsFileEntity(n *model.Node) bool {
 func shouldFuzzyMerge(a, b *model.Node, na, nb string) bool {
 	xfile := a.SourceFile != b.SourceFile
 
+	// Cheap rejections first. File-anchored non-code never merges across
+	// files, and Jaro-Winkler cannot reach the threshold when the lengths
+	// differ too much: jaro <= (2 + short/long)/3, JW adds at most 0.4*(1-j).
+	if (fileAnchoredNonCode[a.FileType] || fileAnchoredNonCode[b.FileType]) && xfile {
+		return false
+	}
+
+	la, lb := runeLen(na), runeLen(nb)
+	if la == 0 || lb == 0 {
+		return false
+	}
+
+	short, long := min(la, lb), max(la, lb)
+	if bound := (2 + float64(short)/float64(long)) / 3; bound+0.4*(1-bound) < mergeThreshold/100 {
+		return false
+	}
+
 	var score float64
 
 	if xfile && max(runeLen(na), runeLen(nb)) >= 12 {
@@ -378,7 +395,7 @@ func shouldFuzzyMerge(a, b *model.Node, na, nb string) bool {
 		score = jaroWinkler(na, nb) * 100
 	}
 
-	if isVariantPair(na, nb) || shortLabelBlocked(na, nb, score) {
+	if score < mergeThreshold || isVariantPair(na, nb) || shortLabelBlocked(na, nb, score) {
 		return false
 	}
 
