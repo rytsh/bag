@@ -1,0 +1,15 @@
+bag
+Copyright 2026 Eray Ates
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product includes software derived from Graphify
+(https://github.com/Graphify-Labs/graphify), which is licensed under the
+Apache License, Version 2.0:
+
+    Graphify
+    Copyright 2026 Safi Shamsi and the Graphify contributors.
+
+Portions of Graphify's extraction pipeline, node-ID normalization, graph
+schema, and analysis logic were reimplemented in Go for this project and
+have been modified from the original Python sources.
