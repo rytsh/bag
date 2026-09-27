@@ -5,9 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/rytsh/bag/internal/config"
+	"github.com/rytsh/bag/internal/detect"
+	"github.com/rytsh/bag/internal/extract"
+	modelpkg "github.com/rytsh/bag/internal/model"
 	"github.com/rytsh/bag/internal/pipeline"
+	"github.com/rytsh/bag/internal/semantic"
 	"github.com/rytsh/bag/internal/store"
 )
 
@@ -38,6 +43,8 @@ func runExtract(ctx context.Context, args []string) error {
 	noCluster := fs.Bool("no-cluster", false, "skip community detection")
 	noViz := fs.Bool("no-viz", false, "skip graph.html")
 	noReport := fs.Bool("no-report", false, "skip GRAPH_REPORT.md")
+	semanticOn := fs.Bool("semantic", false, "run the LLM pass over docs/papers/images (needs BAG_LLM_MODEL)")
+	model := fs.String("model", cfg.LLM.Model, "LLM model for --semantic")
 
 	var excludes stringList
 	fs.Var(&excludes, "exclude", "extra gitignore-style exclude pattern (repeatable)")
@@ -84,6 +91,30 @@ func runExtract(ctx context.Context, args []string) error {
 		}
 	}
 
+	var tokens [2]int
+
+	if *semanticOn {
+		timeout, _ := time.ParseDuration(cfg.LLM.Timeout)
+
+		client, err := semantic.New(semantic.Config{
+			BaseURL: cfg.LLM.BaseURL, APIKey: cfg.LLM.APIKey, Model: *model,
+			Temperature: cfg.LLM.Temperature, TokenBudget: cfg.LLM.TokenBudget,
+			Concurrency: cfg.LLM.Concurrency, Timeout: timeout,
+			CacheDir: filepath.Join(outDir, "cache", "semantic"),
+		})
+		if err != nil {
+			return err
+		}
+
+		opt.Tokens = &tokens
+		opt.Semantic = func(ctx context.Context, det *detect.Result) (*modelpkg.Extraction, error) {
+			ex, t, err := client.Extract(ctx, det, extract.HasExtractor)
+			tokens = t
+
+			return ex, err
+		}
+	}
+
 	res, err := pipeline.Run(ctx, opt)
 	if err != nil {
 		return err
@@ -91,6 +122,10 @@ func runExtract(ctx context.Context, args []string) error {
 
 	fmt.Printf("[bag extract] wrote %s: %d nodes, %d edges, %d communities\n",
 		res.GraphPath, res.Graph.NumNodes(), res.Graph.NumEdges(), len(res.Communities))
+
+	if tokens[0]+tokens[1] > 0 {
+		fmt.Printf("[bag extract] tokens: %d in / %d out\n", tokens[0], tokens[1])
+	}
 
 	if len(res.Extract.Failed) > 0 {
 		fmt.Printf("[bag extract] %d file(s) failed or produced no nodes\n", len(res.Extract.Failed))

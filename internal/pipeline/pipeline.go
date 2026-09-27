@@ -39,6 +39,8 @@ type Options struct {
 	NoReport           bool
 	// Semantic, when set, extracts non-code files (docs/papers/images).
 	Semantic func(ctx context.Context, det *detect.Result) (*model.Extraction, error)
+	// Tokens receives the semantic token usage (input, output).
+	Tokens *[2]int
 }
 
 // Output is the result of a pipeline run.
@@ -103,7 +105,13 @@ func Run(ctx context.Context, opt Options) (*Output, error) {
 		return nil, fmt.Errorf("detect; %w", err)
 	}
 
-	code := det.Files[detect.Code]
+	code := append([]string(nil), det.Files[detect.Code]...)
+	for _, d := range det.Files[detect.Document] {
+		if extract.HasExtractor(d) {
+			code = append(code, d)
+		}
+	}
+
 	slog.Info("detected corpus", "code", len(code), "docs", len(det.Files[detect.Document]),
 		"papers", len(det.Files[detect.Paper]), "images", len(det.Files[detect.Image]))
 
@@ -131,6 +139,10 @@ func Run(ctx context.Context, opt Options) (*Output, error) {
 			edges = append(edges, sem.Edges...)
 			hyper = sem.Hyperedges
 		}
+	}
+
+	if opt.Tokens != nil {
+		o.Tokens = *opt.Tokens
 	}
 
 	o.Graph = graph.Build(nodes, edges, hyper, root)

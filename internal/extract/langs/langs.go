@@ -35,6 +35,7 @@ func init() {
 	reg("bash", ExtractBash, ".sh", ".bash")
 	reg("elixir", ExtractElixir, ".ex", ".exs")
 	reg("julia", ExtractJulia, ".jl")
+	extract.Register(&extract.Language{Name: "markdown", Extensions: []string{".md", ".mdx", ".qmd", ".skill"}, Extract: ExtractMarkdown, Document: true})
 
 	registerTagsLanguages()
 

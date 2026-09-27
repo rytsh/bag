@@ -3,6 +3,8 @@ module github.com/rytsh/bag
 go 1.27.0
 
 require (
+	github.com/fsnotify/fsnotify v1.10.1
+	github.com/ledongthuc/pdf v0.0.0-20260907135840-6c8c28e0e8a0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/odvcencio/gotreesitter v0.55.1
 	github.com/rakunlabs/ada v0.5.3
@@ -12,6 +14,7 @@ require (
 	github.com/rakunlabs/chu v0.5.0
 	github.com/rakunlabs/into v0.6.0
 	github.com/rakunlabs/logi v0.4.6
+	github.com/rakunlabs/ok v0.1.0
 	golang.org/x/text v0.42.0
 )
 
@@ -25,7 +28,6 @@ require (
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/oklog/ulid/v2 v2.1.1 // indirect
 	github.com/rakunlabs/gofret v0.2.1 // indirect
-	github.com/rakunlabs/ok v0.1.0 // indirect
 	github.com/segmentio/asm v1.1.3 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect
 	github.com/spf13/cast v1.10.0 // indirect

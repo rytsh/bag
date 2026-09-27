@@ -12,6 +12,9 @@ type Language struct {
 	Extensions []string
 	Filenames  []string
 	Extract    Extractor
+	// Document marks extractors for document files (markdown); detect keeps
+	// classifying them as documents.
+	Document bool
 }
 
 var (
@@ -72,8 +75,15 @@ func LookupLanguage(path string) *Language {
 	return nil
 }
 
-// IsCode reports whether bag can extract path.
-func IsCode(path string) bool { return LookupLanguage(path) != nil }
+// IsCode reports whether path is a code file bag can extract.
+func IsCode(path string) bool {
+	l := LookupLanguage(path)
+
+	return l != nil && !l.Document
+}
+
+// HasExtractor reports whether any AST extractor handles path.
+func HasExtractor(path string) bool { return LookupLanguage(path) != nil }
 
 // Languages lists registered languages.
 func Languages() []*Language {
