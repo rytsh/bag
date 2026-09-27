@@ -90,7 +90,7 @@ func collectTypeRefs(n *tsx.Node, generic bool, out *[]typeRef) {
 }
 
 // Extract parses a Go file.
-func Extract(path string, src []byte) *model.Extraction {
+func Extract(path, _ string, src []byte) *model.Extraction {
 	tree, err := tsx.Parse("go", src)
 	if err != nil {
 		return &model.Extraction{Error: err.Error()}

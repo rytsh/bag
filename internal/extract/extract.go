@@ -18,9 +18,9 @@ import (
 	"github.com/rytsh/bag/internal/model"
 )
 
-// Extractor extracts one file. path is the path as given to the pipeline
-// (absolute), src is the file content.
-type Extractor func(path string, src []byte) *model.Extraction
+// Extractor extracts one file. path is absolute, root is the scan root and
+// src is the file content.
+type Extractor func(path, root string, src []byte) *model.Extraction
 
 // Options configure an extraction run.
 type Options struct {
@@ -97,7 +97,7 @@ func Run(ctx context.Context, paths []string, opt Options) (*Result, error) {
 			defer wg.Done()
 
 			for i := range jobs {
-				per[i] = fileResult{path: abs[i], ex: extractOne(abs[i], opt.Cache)}
+				per[i] = fileResult{path: abs[i], ex: extractOne(abs[i], root, opt.Cache)}
 
 				if opt.Progress != nil {
 					mu.Lock()
@@ -146,7 +146,7 @@ func Run(ctx context.Context, paths []string, opt Options) (*Result, error) {
 	return res, nil
 }
 
-func extractOne(path string, cache Cache) *model.Extraction {
+func extractOne(path, root string, cache Cache) *model.Extraction {
 	ext := Lookup(path)
 	if ext == nil {
 		return nil
@@ -163,7 +163,7 @@ func extractOne(path string, cache Cache) *model.Extraction {
 		}
 	}
 
-	ex := safeExtract(ext, path, src)
+	ex := safeExtract(ext, path, root, src)
 	if cache != nil && ex.Error == "" && len(ex.Nodes) > 0 {
 		cache.Put(path, src, ex)
 	}
@@ -171,14 +171,14 @@ func extractOne(path string, cache Cache) *model.Extraction {
 	return ex
 }
 
-func safeExtract(ext Extractor, path string, src []byte) (out *model.Extraction) {
+func safeExtract(ext Extractor, path, root string, src []byte) (out *model.Extraction) {
 	defer func() {
 		if r := recover(); r != nil {
 			out = &model.Extraction{Error: "panic during extraction"}
 		}
 	}()
 
-	out = ext(path, src)
+	out = ext(path, root, src)
 	if out == nil {
 		out = &model.Extraction{}
 	}

@@ -817,28 +817,155 @@ func (c *corpus) repointGoImports() {
 	c.edges = out
 }
 
-// relativize rewrites source_file values to root-relative, slash paths.
+// relativize rewrites source_file values to root-relative, slash paths and
+// canonicalizes any id still minted from an absolute path (Graphify's final
+// ext_id_remap pass).
 func (c *corpus) relativize() {
-	fix := func(sf string) string {
-		if sf == "" || !filepath.IsAbs(sf) {
-			return filepath.ToSlash(sf)
-		}
-
-		if rel := relPath(c.root, sf); rel != "" {
-			return rel
-		}
-
-		return filepath.Base(sf)
+	owned := map[string]bool{}
+	for _, n := range c.nodes {
+		owned[n.ID] = true
 	}
 
+	type entry struct {
+		sf, canonical string
+		keys          []string
+	}
+
+	cache := map[string]entry{}
+	get := func(sf string) entry {
+		if e, ok := cache[sf]; ok {
+			return e
+		}
+
+		var e entry
+
+		if rel := relPath(c.root, sf); rel != "" {
+			e.sf, e.canonical = rel, base.FileNodeID(rel)
+		} else {
+			e.sf = portableOutOfRoot(c.root, sf)
+			e.canonical = ids.MakeID("ext", e.sf)
+		}
+
+		resolved := sf
+		if r, err := filepath.EvalSymlinks(sf); err == nil {
+			resolved = r
+		}
+
+		seen := map[string]bool{}
+		for _, k := range []string{ids.MakeID(sf), ids.MakeID(resolved), ids.MakeID(base.FileStem(sf)), ids.MakeID(base.FileStem(resolved))} {
+			if !seen[k] {
+				seen[k] = true
+				e.keys = append(e.keys, k)
+			}
+		}
+
+		cache[sf] = e
+
+		return e
+	}
+
+	remap := map[string]string{}
+
 	for _, n := range c.nodes {
-		n.SourceFile = fix(n.SourceFile)
+		if n.SourceFile == "" || !filepath.IsAbs(n.SourceFile) {
+			n.SourceFile = filepath.ToSlash(n.SourceFile)
+
+			continue
+		}
+
+		e := get(n.SourceFile)
+		for _, k := range e.keys {
+			if k == e.canonical {
+				continue
+			}
+
+			if _, ok := remap[k]; ok {
+				continue
+			}
+
+			if owned[k] && n.ID != k {
+				continue
+			}
+
+			remap[k] = e.canonical
+		}
+
+		n.SourceFile = e.sf
 		n.OriginFile = ""
 	}
 
-	for _, e := range c.edges {
-		e.SourceFile = fix(e.SourceFile)
+	for _, ed := range c.edges {
+		if ed.SourceFile != "" && filepath.IsAbs(ed.SourceFile) {
+			ed.SourceFile = get(ed.SourceFile).sf
+		} else {
+			ed.SourceFile = filepath.ToSlash(ed.SourceFile)
+		}
 	}
+
+	for _, n := range c.nodes {
+		n.OriginFile = ""
+	}
+
+	if len(remap) == 0 {
+		return
+	}
+
+	canon := func(nid string) string {
+		if v, ok := remap[nid]; ok {
+			return v
+		}
+
+		if strings.HasSuffix(nid, "__entry") {
+			if v, ok := remap[strings.TrimSuffix(nid, "__entry")]; ok {
+				return v + "__entry"
+			}
+		}
+
+		if !owned[nid] {
+			for idx := strings.LastIndexByte(nid, '_'); idx > 0; idx = strings.LastIndexByte(nid[:idx], '_') {
+				if v, ok := remap[nid[:idx]]; ok {
+					return v + nid[idx:]
+				}
+			}
+		}
+
+		return nid
+	}
+
+	for _, n := range c.nodes {
+		n.ID = canon(n.ID)
+	}
+
+	for _, e := range c.edges {
+		e.Source = canon(e.Source)
+		e.Target = canon(e.Target)
+	}
+}
+
+// portableOutOfRoot renders a path outside root as a short relative form, or
+// its basename when it lives far away.
+func portableOutOfRoot(root, p string) string {
+	rel, err := filepath.Rel(root, p)
+	if err != nil {
+		return filepath.Base(p)
+	}
+
+	rel = filepath.ToSlash(rel)
+	up := 0
+
+	for _, seg := range strings.Split(rel, "/") {
+		if seg != ".." {
+			break
+		}
+
+		up++
+	}
+
+	if up > 3 {
+		return filepath.Base(p)
+	}
+
+	return rel
 }
 
 func addSet(m map[string]map[string]bool, k, v string) {

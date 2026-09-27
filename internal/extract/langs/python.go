@@ -1,0 +1,638 @@
+package langs
+
+import (
+	"crypto/sha1" //nolint:gosec // id salt, mirrors Graphify
+	"encoding/hex"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/rytsh/bag/internal/extract/base"
+	"github.com/rytsh/bag/internal/extract/generic"
+	"github.com/rytsh/bag/internal/extract/tsx"
+	"github.com/rytsh/bag/internal/ids"
+	"github.com/rytsh/bag/internal/model"
+)
+
+var pyTypeContainers = base.NewSet(
+	"list", "dict", "set", "tuple", "frozenset", "type",
+	"List", "Dict", "Set", "Tuple", "FrozenSet", "Type",
+	"Optional", "Union", "Sequence", "Iterable", "Mapping", "MutableMapping",
+	"Iterator", "Callable", "Awaitable", "AsyncIterable", "AsyncIterator", "Coroutine",
+	"Generator", "AsyncGenerator", "ContextManager", "AsyncContextManager",
+	"Annotated", "ClassVar", "Final", "Literal", "Concatenate", "ParamSpec", "TypeVar",
+	"None", "Ellipsis",
+)
+
+var pyAnnotationNoise = base.NewSet(
+	"str", "int", "float", "bool", "bytes", "bytearray", "complex", "object",
+	"True", "False",
+	"MagicMock", "Mock", "AsyncMock", "NonCallableMock",
+	"NonCallableMagicMock", "PropertyMock", "patch", "sentinel",
+)
+
+var pyDecoratorNoise = base.NewSet(
+	"property", "staticmethod", "classmethod", "abstractmethod",
+	"abstractproperty", "cached_property", "wraps", "lru_cache", "cache",
+	"singledispatch", "singledispatchmethod", "total_ordering",
+	"contextmanager", "asynccontextmanager", "overload", "override",
+	"final", "no_type_check", "runtime_checkable", "dataclass",
+)
+
+type typeRef struct{ name, role string }
+
+func roleOf(generic bool) string {
+	if generic {
+		return "generic_arg"
+	}
+
+	return "type"
+}
+
+func pyTypeRefs(n *tsx.Node, generic bool, out *[]typeRef) {
+	if n == nil {
+		return
+	}
+
+	ok := func(s string) bool { return s != "" && !pyTypeContainers.Has(s) && !pyAnnotationNoise.Has(s) }
+
+	switch n.Type() {
+	case "type":
+		for _, c := range n.NamedChildren() {
+			pyTypeRefs(c, generic, out)
+		}
+
+		return
+	case "identifier":
+		if s := n.Text(); ok(s) {
+			*out = append(*out, typeRef{s, roleOf(generic)})
+		}
+
+		return
+	case "attribute":
+		t := n.Text()
+		t = t[strings.LastIndexByte(t, '.')+1:]
+
+		if ok(t) {
+			*out = append(*out, typeRef{t, roleOf(generic)})
+		}
+
+		return
+	case "generic_type":
+		for _, c := range n.Children() {
+			switch c.Type() {
+			case "identifier":
+				if s := c.Text(); ok(s) {
+					*out = append(*out, typeRef{s, roleOf(generic)})
+				}
+			case "type_parameter":
+				for _, s := range c.NamedChildren() {
+					pyTypeRefs(s, true, out)
+				}
+			}
+		}
+
+		return
+	case "subscript":
+		v := n.Field("value")
+		pyTypeRefs(v, generic, out)
+
+		for _, c := range n.NamedChildren() {
+			if !c.Same(v) {
+				pyTypeRefs(c, true, out)
+			}
+		}
+
+		return
+	}
+
+	if n.IsNamed() {
+		for _, c := range n.NamedChildren() {
+			pyTypeRefs(c, generic, out)
+		}
+	}
+}
+
+func emitRefs(x *generic.Ctx, from string, line int, refs []typeRef, def string) {
+	for _, r := range refs {
+		ctx := def
+		if r.role == "generic_arg" {
+			ctx = "generic_arg"
+		}
+
+		x.Ref(from, x.EnsureNamed(r.name), line, ctx)
+	}
+}
+
+func pyDecoratorName(d *tsx.Node) string {
+	for _, c := range d.NamedChildren() {
+		t := c
+		if t.Type() == "call" {
+			if f := t.Field("function"); f != nil {
+				t = f
+			}
+		}
+
+		switch t.Type() {
+		case "attribute":
+			if a := t.Field("attribute"); a != nil {
+				return a.Text()
+			}
+
+			return ""
+		case "identifier":
+			return t.Text()
+		}
+
+		return ""
+	}
+
+	return ""
+}
+
+func probePy(cand string) string {
+	if st, err := os.Stat(cand); err == nil {
+		if st.IsDir() {
+			if fi, err := os.Stat(filepath.Join(cand, "__init__.py")); err == nil && fi.Mode().IsRegular() {
+				return filepath.Join(cand, "__init__.py")
+			}
+		} else if st.Mode().IsRegular() {
+			return cand
+		}
+	}
+
+	if filepath.Base(cand) == "" {
+		return ""
+	}
+
+	py := strings.TrimSuffix(cand, filepath.Ext(cand)) + ".py"
+	if filepath.Ext(cand) == "" {
+		py = cand + ".py"
+	}
+
+	if st, err := os.Stat(py); err == nil && st.Mode().IsRegular() {
+		return py
+	}
+
+	return ""
+}
+
+func isFile(p string) bool {
+	st, err := os.Stat(p)
+
+	return err == nil && st.Mode().IsRegular()
+}
+
+func isDir(p string) bool {
+	st, err := os.Stat(p)
+
+	return err == nil && st.IsDir()
+}
+
+// resolvePyModule mirrors Graphify's _resolve_python_module_path.
+func resolvePyModule(module, current, root string, level int) string {
+	if level > 0 {
+		b := filepath.Dir(current)
+		for i := 0; i < level-1; i++ {
+			b = filepath.Dir(b)
+		}
+
+		cand := b
+		if module != "" {
+			cand = filepath.Join(b, strings.ReplaceAll(module, ".", "/"))
+		}
+
+		return probePy(cand)
+	}
+
+	rel := strings.ReplaceAll(module, ".", "/")
+	if hit := probePy(filepath.Join(root, rel)); hit != "" {
+		return hit
+	}
+
+	for anc := filepath.Dir(current); ; anc = filepath.Dir(anc) {
+		if r, err := filepath.Rel(root, anc); err != nil || strings.HasPrefix(r, "..") {
+			break
+		}
+
+		if anc != root && !isFile(filepath.Join(anc, "__init__.py")) {
+			if hit := probePy(filepath.Join(anc, rel)); hit != "" {
+				return hit
+			}
+		}
+
+		if anc == root || filepath.Dir(anc) == anc {
+			break
+		}
+	}
+
+	return ""
+}
+
+func pyImport(x *generic.Ctx, n *tsx.Node) [][2]string {
+	b := x.B
+	root := x.Root
+
+	switch n.Type() {
+	case "import_statement":
+		for _, c := range n.Children() {
+			if c.Type() != "dotted_name" && c.Type() != "aliased_import" {
+				continue
+			}
+
+			raw := c.Text()
+			mod, _, _ := strings.Cut(raw, " as ")
+			mod = strings.TrimLeft(strings.TrimSpace(mod), ".")
+
+			tp := resolvePyModule(mod, x.Path, root, 0)
+			if tp == x.Path {
+				tp = ""
+			}
+
+			tgt := ids.MakeID(mod)
+			if tp != "" {
+				tgt = ids.MakeID(tp)
+			}
+
+			b.AddEdgeCtx(b.FileID, tgt, "imports", n.Line(), "import")
+		}
+	case "import_from_statement":
+		mn := n.Field("module_name")
+		if mn == nil {
+			return nil
+		}
+
+		raw := mn.Text()
+
+		var tgt string
+
+		if strings.HasPrefix(raw, ".") {
+			dots := len(raw) - len(strings.TrimLeft(raw, "."))
+			mod := strings.TrimLeft(raw, ".")
+
+			tp := resolvePyModule(mod, x.Path, root, dots)
+			if tp == "" {
+				bdir := filepath.Dir(x.Path)
+				for i := 0; i < dots-1; i++ {
+					bdir = filepath.Dir(bdir)
+				}
+
+				rel := "__init__.py"
+				if mod != "" {
+					rel = strings.ReplaceAll(mod, ".", "/") + ".py"
+				}
+
+				tp = filepath.Join(bdir, rel)
+			}
+
+			tgt = ids.MakeID(tp)
+		} else {
+			tp := resolvePyModule(raw, x.Path, root, 0)
+			if tp == "" && isDir(filepath.Join(root, strings.ReplaceAll(raw, ".", "/"))) {
+				return nil
+			}
+
+			if tp == x.Path {
+				tp = ""
+			}
+
+			tgt = ids.MakeID(raw)
+			if tp != "" {
+				tgt = ids.MakeID(tp)
+			}
+		}
+
+		b.AddEdgeCtx(b.FileID, tgt, "imports_from", n.Line(), "import")
+	}
+
+	return nil
+}
+
+func pyClassHook(x *generic.Ctx, n *tsx.Node, classID string, line int) {
+	if args := n.Field("superclasses"); args != nil {
+		for _, a := range args.Children() {
+			if a.Type() == "identifier" {
+				x.B.AddEdge(classID, x.EnsureNamed(a.Text()), "inherits", line)
+			}
+		}
+	}
+
+	pyDecorators(x, n, classID)
+}
+
+func pyDecorators(x *generic.Ctx, n *tsx.Node, owner string) {
+	p := n.Parent()
+	if p == nil || p.Type() != "decorated_definition" {
+		return
+	}
+
+	for _, c := range p.Children() {
+		if c.Type() != "decorator" {
+			continue
+		}
+
+		name := pyDecoratorName(c)
+		if name == "" || pyDecoratorNoise.Has(name) {
+			continue
+		}
+
+		x.Ref(owner, x.EnsureNamed(name), c.Line(), "decorator")
+	}
+}
+
+func pyFunctionHook(x *generic.Ctx, n *tsx.Node, funcID string, line int) {
+	var refs []typeRef
+
+	if params := n.Field("parameters"); params != nil {
+		for _, c := range params.Children() {
+			if c.Type() == "typed_parameter" || c.Type() == "typed_default_parameter" {
+				pyTypeRefs(c.Field("type"), false, &refs)
+			}
+		}
+	}
+
+	emitRefs(x, funcID, line, refs, "parameter_type")
+
+	refs = nil
+	pyTypeRefs(n.Field("return_type"), false, &refs)
+	emitRefs(x, funcID, line, refs, "return_type")
+
+	pyDecorators(x, n, funcID)
+}
+
+var pyRationalePrefixes = []string{"# NOTE:", "# IMPORTANT:", "# HACK:", "# WHY:", "# RATIONALE:", "# TODO:", "# FIXME:"}
+
+var (
+	alembicRevision = regexp.MustCompile(`(?m)^revision\s*[:=]`)
+)
+
+func pyAutogenerated(src []byte) bool {
+	head := string(src)
+	if len(head) > 2048 {
+		head = head[:2048]
+	}
+
+	for _, m := range []string{"DO NOT EDIT", "@generated", "Generated by the protocol buffer"} {
+		if strings.Contains(head, m) {
+			return true
+		}
+	}
+
+	if alembicRevision.MatchString(head) && strings.Contains(head, "def upgrade(") && strings.Contains(head, "down_revision") {
+		return true
+	}
+
+	return strings.Contains(head, "class Migration(migrations.Migration)") && strings.Contains(head, "operations")
+}
+
+// ShortenLabel mimics textwrap.shorten(width, placeholder="…"): whole words
+// are kept while the result plus the placeholder fits in width.
+func ShortenLabel(text string, width int) string {
+	words := strings.Fields(text)
+	flat := strings.Join(words, " ")
+
+	if len([]rune(flat)) <= width {
+		return flat
+	}
+
+	var out []string
+
+	l := 0
+	for _, w := range words {
+		add := len([]rune(w))
+		if len(out) > 0 {
+			add++
+		}
+
+		if l+add+1 > width {
+			break
+		}
+
+		out = append(out, w)
+		l += add
+	}
+
+	if len(out) == 0 {
+		r := []rune(flat)
+
+		return string(r[:width-1]) + "…"
+	}
+
+	return strings.Join(out, " ") + "…"
+}
+
+func addRationale(x *generic.Ctx, text string, line int, parent string) {
+	b := x.B
+	rid := ids.MakeID(b.Stem, "rationale", itoa(line))
+
+	if !b.Has(rid) {
+		n := b.AddNode(rid, ShortenLabel(text, 80), line)
+		n.FileType = model.FileTypeRationale
+	}
+
+	b.AddEdge(rid, parent, "rationale_for", line)
+}
+
+func pyDocstring(bodyNode *tsx.Node) (string, int, bool) {
+	if bodyNode == nil {
+		return "", 0, false
+	}
+
+	for _, c := range bodyNode.Children() {
+		if c.Type() == "comment" {
+			continue
+		}
+
+		if c.Type() == "string" || c.Type() == "concatenated_string" {
+			t := strings.TrimSpace(strings.Trim(c.Text(), `"'`))
+			if len([]rune(t)) > 20 {
+				return t, c.Line(), true
+			}
+
+			break
+		}
+
+		if c.Type() == "expression_statement" {
+			for _, s := range c.Children() {
+				if s.Type() == "string" || s.Type() == "concatenated_string" {
+					t := strings.TrimSpace(strings.Trim(s.Text(), `"'`))
+					if len([]rune(t)) > 20 {
+						return t, c.Line(), true
+					}
+				}
+			}
+		}
+
+		break
+	}
+
+	return "", 0, false
+}
+
+func pyRationale(x *generic.Ctx) {
+	b := x.B
+	root := x.Tree.Root
+
+	if !pyAutogenerated(x.Tree.Src) {
+		if t, l, ok := pyDocstring(root); ok {
+			addRationale(x, t, l, b.FileID)
+		}
+	}
+
+	var walk func(n *tsx.Node, parent string)
+	walk = func(n *tsx.Node, parent string) {
+		switch n.Type() {
+		case "class_definition":
+			nn, bd := n.Field("name"), n.Field("body")
+			if nn != nil && bd != nil {
+				id := ids.MakeID(b.Stem, nn.Text())
+				if t, l, ok := pyDocstring(bd); ok {
+					addRationale(x, t, l, id)
+				}
+
+				for _, c := range bd.Children() {
+					walk(c, id)
+				}
+			}
+
+			return
+		case "function_definition":
+			nn, bd := n.Field("name"), n.Field("body")
+			if nn != nil && bd != nil {
+				id := ids.MakeID(b.Stem, nn.Text())
+				if parent != b.FileID {
+					id = ids.MakeID(parent, nn.Text())
+				}
+
+				if t, l, ok := pyDocstring(bd); ok {
+					addRationale(x, t, l, id)
+				}
+			}
+
+			return
+		}
+
+		for _, c := range n.Children() {
+			walk(c, parent)
+		}
+	}
+
+	walk(root, b.FileID)
+
+	for i, line := range strings.Split(string(x.Tree.Src), "\n") {
+		s := strings.TrimSpace(line)
+		for _, p := range pyRationalePrefixes {
+			if strings.HasPrefix(s, p) {
+				addRationale(x, s, i+1, b.FileID)
+
+				break
+			}
+		}
+	}
+}
+
+// pyUnderscoreGroups returns ids for names that collapse to the same id once
+// leading/trailing underscores are stripped.
+func pyUnderscoreGroups(root *tsx.Node, stem string) map[string]map[string]bool {
+	groups := map[string]map[string]bool{}
+	rec := func(plain, name string) {
+		if groups[plain] == nil {
+			groups[plain] = map[string]bool{}
+		}
+
+		groups[plain][name] = true
+	}
+
+	for _, c := range root.Children() {
+		switch c.Type() {
+		case "function_definition":
+			if nn := c.Field("name"); nn != nil {
+				rec(ids.MakeID(stem, nn.Text()), nn.Text())
+			}
+		case "class_definition":
+			cn, bd := c.Field("name"), c.Field("body")
+			if cn == nil || bd == nil {
+				continue
+			}
+
+			cid := ids.MakeID(stem, cn.Text())
+
+			for _, m := range bd.Children() {
+				if m.Type() != "function_definition" {
+					continue
+				}
+
+				if nn := m.Field("name"); nn != nil {
+					rec(ids.MakeID(cid, nn.Text()), nn.Text())
+				}
+			}
+		}
+	}
+
+	for k, v := range groups {
+		if len(v) < 2 {
+			delete(groups, k)
+		}
+	}
+
+	return groups
+}
+
+func pySalt(plain, name string, groups map[string]map[string]bool) string {
+	names := groups[plain]
+	if len(names) < 2 {
+		return plain
+	}
+
+	var public []string
+
+	for n := range names {
+		if !strings.HasPrefix(n, "_") {
+			public = append(public, n)
+		}
+	}
+
+	if len(public) == 1 && name == public[0] {
+		return plain
+	}
+
+	sum := sha1.Sum([]byte(name)) //nolint:gosec // id salt
+
+	return ids.MakeID(plain, hex.EncodeToString(sum[:])[:6])
+}
+
+var pythonConfig = &generic.Config{
+	Lang:                 "python",
+	Grammar:              "python",
+	ClassTypes:           base.NewSet("class_definition"),
+	FunctionTypes:        base.NewSet("function_definition"),
+	ImportTypes:          base.NewSet("import_statement", "import_from_statement"),
+	CallTypes:            base.NewSet("call"),
+	CallFunctionField:    "function",
+	CallAccessorTypes:    base.NewSet("attribute"),
+	CallAccessorField:    "attribute",
+	CallAccessorObjField: "object",
+	FunctionBoundary:     base.NewSet("function_definition"),
+	ImportHandler:        pyImport,
+	ClassHook:            pyClassHook,
+	FunctionHook:         pyFunctionHook,
+	Rationale:            pyRationale,
+	DeferMember: func(member bool, receiver string) bool {
+		return member && receiver != "self" && receiver != "cls" && receiver != "super"
+	},
+	PreScan: func(x *generic.Ctx) {
+		groups := pyUnderscoreGroups(x.Tree.Root, x.B.Stem)
+		if len(groups) > 0 {
+			x.SymbolID = func(plain, name string) string { return pySalt(plain, name, groups) }
+		}
+	},
+}
+
+// ExtractPython extracts a Python file.
+func ExtractPython(path, root string, src []byte) *model.Extraction {
+	return generic.Extract(pythonConfig, path, root, src)
+}
+
+func itoa(i int) string { return strconv.Itoa(i) }
