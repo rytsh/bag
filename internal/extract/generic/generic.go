@@ -63,6 +63,11 @@ type Config struct {
 	NoNewlineFix bool
 	// BodyNode is invoked for every node visited by the call walker.
 	BodyNode func(x *Ctx, n *tsx.Node, caller string)
+	// IndirectRefs yields identifier nodes referenced as values under n
+	// (call arguments, dispatch-table values, assignment RHS) with a context.
+	IndirectRefs func(x *Ctx, n *tsx.Node) []IndirectRef
+	// ModuleIndirect scans module-level code for indirect references.
+	ModuleIndirect func(x *Ctx)
 	// PreScan runs before the main walk (collision pre-scans, tables).
 	PreScan func(x *Ctx)
 	// PostProcess runs after call extraction on the final result.
@@ -80,6 +85,17 @@ type Ctx struct {
 	// ParentClass is the enclosing class id while a ClassHook runs.
 	ParentClass string
 
+	// ScopeParents maps a nested function id to its enclosing scope id and
+	// LexicalScope maps scope id -> bare name -> nested function id, so bare
+	// calls resolve to the lexically closest definition first.
+	ScopeParents map[string]string
+	LexicalScope map[string]map[string]string
+	// LocalNames holds names bound locally per function (params/locals); a
+	// bare call to one is a call through a local value, not a definition.
+	LocalNames map[string]map[string]bool
+	// ExternalImports are names bound by imports of external modules.
+	ExternalImports map[string]bool
+
 	// SymbolID, when set, rewrites a plain function id (collision salting).
 	SymbolID func(plain, name string) string
 	// Data holds language-specific per-file state.
@@ -91,12 +107,22 @@ type Ctx struct {
 	bodies       []body
 	caller       string
 	parentOf     map[string]string
+	emitIndirect func(ref IndirectRef, scope string, locals map[string]bool)
 	callable     map[string]bool
 	callableCls  map[string]bool
 	initializers []body
 
 	// Walk re-enters the main walker (for hooks).
 	Walk func(n *tsx.Node, parentClass string)
+}
+
+// IndirectRef is a function referenced by name (callback, dispatch table).
+type IndirectRef struct {
+	Ident   *tsx.Node
+	Name    string
+	Context string
+	// ByName skips local-shadow filtering (getattr string names).
+	ByName bool
 }
 
 type body struct {
@@ -419,6 +445,13 @@ func (x *Ctx) WalkFunctionNamed(n *tsx.Node, parentClass, funcName string) strin
 	return funcID
 }
 
+// EmitIndirect emits (or defers) an indirect reference from scope.
+func (x *Ctx) EmitIndirect(ref IndirectRef, scope string, locals map[string]bool) {
+	if x.emitIndirect != nil {
+		x.emitIndirect(ref, scope, locals)
+	}
+}
+
 // ParentOf returns the enclosing class id of an emitted function.
 func (x *Ctx) ParentOf(funcID string) string { return x.parentOf[funcID] }
 
@@ -442,6 +475,14 @@ func walkCalls(x *Ctx) {
 		}
 
 		norm := strings.TrimLeft(strings.Trim(n.Label, "()"), ".")
+		if _, nested := x.ScopeParents[n.ID]; nested {
+			if _, ok := labelToID[norm]; !ok {
+				labelToID[norm] = n.ID
+			}
+
+			continue
+		}
+
 		labelToID[norm] = n.ID
 	}
 
@@ -452,6 +493,52 @@ func walkCalls(x *Ctx) {
 	}
 
 	seen := map[[2]string]bool{}
+	seenIndirect := map[[2]string]bool{}
+
+	nidSF := func(id string) string {
+		if n := b.Get(id); n != nil {
+			return n.SourceFile
+		}
+
+		return ""
+	}
+
+	x.emitIndirect = func(ref IndirectRef, scope string, locals map[string]bool) {
+		name := ref.Name
+		if !ref.ByName {
+			if locals[name] || name == "self" || name == "cls" {
+				return
+			}
+
+			if x.ExternalImports[name] {
+				return
+			}
+		}
+
+		refID := labelToID[name]
+		if refID == "" || (!x.callable[refID] && nidSF(refID) != x.Path) {
+			b.RawCalls = append(b.RawCalls, &model.RawCall{
+				CallerID: scope, Callee: name, Indirect: true, Context: ref.Context,
+				Language: cfg.Lang, SourceFile: x.Path, SourceLocation: base.Loc(ref.Ident.Line()),
+			})
+
+			return
+		}
+
+		if refID == scope || !x.callable[refID] || x.callableCls[refID] {
+			return
+		}
+
+		pair := [2]string{scope, refID}
+		if seen[pair] || seenIndirect[pair] {
+			return
+		}
+
+		seenIndirect[pair] = true
+		e := b.AddEdgeCtx(scope, refID, "indirect_call", ref.Ident.Line(), ref.Context)
+		e.Confidence = model.Inferred
+		e.ConfidenceScore = model.Score(0.85)
+	}
 
 	var walkC func(n *tsx.Node, caller string)
 	walkC = func(n *tsx.Node, caller string) {
@@ -493,7 +580,15 @@ func walkCalls(x *Ctx) {
 				}
 
 				if !deferred {
-					tgt = labelToID[callee]
+					if !member && x.LexicalScope != nil {
+						for sc := caller; sc != "" && tgt == ""; sc = x.ScopeParents[sc] {
+							tgt = x.LexicalScope[sc][callee]
+						}
+					}
+
+					if tgt == "" {
+						tgt = labelToID[callee]
+					}
 				}
 
 				if tgt != "" && nidSourced(tgt) {
@@ -502,7 +597,7 @@ func walkCalls(x *Ctx) {
 						seen[pair] = true
 						b.AddEdgeCtx(caller, tgt, "calls", n.Line(), "call")
 					}
-				} else if tgt == "" {
+				} else if tgt == "" && !(cfg.Lang == "python" && !member && x.LocalNames[caller][callee]) {
 					b.RawCalls = append(b.RawCalls, &model.RawCall{
 						CallerID:       caller,
 						Callee:         callee,
@@ -516,6 +611,12 @@ func walkCalls(x *Ctx) {
 			}
 		}
 
+		if cfg.IndirectRefs != nil {
+			for _, ref := range cfg.IndirectRefs(x, n) {
+				x.emitIndirect(ref, caller, x.LocalNames[caller])
+			}
+		}
+
 		for _, c := range n.Children() {
 			walkC(c, caller)
 		}
@@ -523,6 +624,10 @@ func walkCalls(x *Ctx) {
 
 	for _, bd := range x.bodies {
 		walkC(bd.node, bd.caller)
+	}
+
+	if cfg.ModuleIndirect != nil {
+		cfg.ModuleIndirect(x)
 	}
 
 	for _, in := range x.initializers {

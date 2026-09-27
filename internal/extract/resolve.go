@@ -35,11 +35,13 @@ func resolve(root string, per []fileResult, res *Result) {
 		c.rawCalls = append(c.rawCalls, fr.ex.RawCalls...)
 	}
 
+	c.runSymbolResolvers()
 	c.canonicalizeFileIDs()
 	c.disambiguateCollidingIDs()
 	c.canonicalizeCSharpNamespaces()
 	c.runTypeResolvers()
 	c.resolveGoTypeReferences()
+	c.runPreRewireResolvers()
 	c.rewireUniqueStubs()
 	c.resolveCalls()
 	c.repointGoImports()

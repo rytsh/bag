@@ -41,4 +41,6 @@ func init() {
 
 	extract.RegisterTypeResolver(resolvePHPTypeReferences)
 	extract.RegisterTypeResolver(resolveJavaTypeReferences)
+	extract.RegisterPreRewireResolver(resolvePythonCrossFileImports)
+	extract.RegisterSymbolResolver(resolvePythonSymbols)
 }

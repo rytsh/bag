@@ -34,6 +34,7 @@ var (
 // Build merges extractions into a graph (Graphify's build + build_from_json).
 func Build(nodes []*model.Node, edges []*model.Edge, hyper []*model.Hyperedge, root string) *Graph {
 	nodes = dedupeNodes(nodes, root)
+	nodes, edges = DedupeEntities(nodes, edges)
 
 	g := New()
 
@@ -55,6 +56,66 @@ func Build(nodes []*model.Node, edges []*model.Edge, hyper []*model.Hyperedge, r
 	normToID := map[string]string{}
 	for _, id := range g.order {
 		normToID[ids.NormalizeID(id)] = id
+	}
+
+	// Legacy stem aliases: an edge target minted with an older, shorter file
+	// stem (parent_stem or bare stem) resolves to the unique node that owns
+	// that stem today (Graphify's _alias_candidates).
+	aliasCands := map[string]map[string]bool{}
+	addAlias := func(k, id string) {
+		if aliasCands[k] == nil {
+			aliasCands[k] = map[string]bool{}
+		}
+
+		aliasCands[k][id] = true
+	}
+
+	for _, n := range g.Nodes() {
+		sf := n.SourceFile
+		if sf == "" || filepath.IsAbs(sf) {
+			continue
+		}
+
+		newStem := ids.MakeID(base.FileStem(sf))
+		norm := ids.NormalizeID(n.ID)
+
+		suffix := ""
+		if n.Label != path.Base(sf) && strings.HasPrefix(norm, newStem) {
+			suffix = norm[len(newStem):]
+		}
+
+		for _, old := range oldFileStems(sf) {
+			if old == newStem {
+				continue
+			}
+
+			addAlias(ids.NormalizeID(old+suffix), n.ID)
+			addAlias(old+suffix, n.ID)
+		}
+
+		if strings.HasPrefix(n.Label, ".") && extraOrigin(n) == "ast" {
+			m := ids.MakeID(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(n.Label), "."), "()"))
+			alias := newStem + "_" + m
+
+			if norm != ids.NormalizeID(alias) {
+				addAlias(ids.NormalizeID(alias), n.ID)
+				addAlias(alias, n.ID)
+			}
+		}
+	}
+
+	for k, c := range aliasCands {
+		if len(c) != 1 {
+			continue
+		}
+
+		if _, ok := normToID[k]; ok {
+			continue
+		}
+
+		for id := range c {
+			normToID[k] = id
+		}
 	}
 
 	sorted := append([]*model.Edge(nil), edges...)
@@ -174,6 +235,42 @@ func Build(nodes []*model.Node, edges []*model.Edge, hyper []*model.Hyperedge, r
 	disambiguateFileLabels(g)
 
 	return g
+}
+
+// oldFileStems returns pre-migration stem forms for a relative path:
+// "parent.stem" and bare "stem".
+func oldFileStems(rel string) []string {
+	rel = filepath.ToSlash(rel)
+	stem := strings.TrimSuffix(path.Base(rel), base.Suffix(rel))
+
+	var forms []string
+
+	if parent := path.Base(path.Dir(rel)); parent != "." && parent != "/" && parent != "" {
+		forms = append(forms, ids.MakeID(parent+"."+stem))
+	}
+
+	forms = append(forms, ids.MakeID(stem))
+
+	seen := map[string]bool{}
+
+	var out []string
+
+	for _, f := range forms {
+		if f != "" && !seen[f] {
+			seen[f] = true
+			out = append(out, f)
+		}
+	}
+
+	return out
+}
+
+func extraOrigin(n *model.Node) string {
+	if v, ok := n.Extra["_origin"].(string); ok {
+		return v
+	}
+
+	return "ast"
 }
 
 func skipCrossLanguage(g *Graph, e *model.Edge) bool {

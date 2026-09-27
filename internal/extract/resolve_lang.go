@@ -18,9 +18,34 @@ type FileResult struct {
 }
 
 var (
-	resolvers     []Resolver
-	typeResolvers []Resolver
+	resolvers          []Resolver
+	typeResolvers      []Resolver
+	preRewireResolvers []Resolver
 )
+
+var symbolResolvers []Resolver
+
+// RegisterSymbolResolver adds a resolver that runs first, while ids and
+// source files are still absolute-path derived (symbol-level imports).
+func RegisterSymbolResolver(r Resolver) { symbolResolvers = append(symbolResolvers, r) }
+
+func (c *corpus) runSymbolResolvers() {
+	per := c.fileResults()
+	for _, r := range symbolResolvers {
+		r(c.root, &c.nodes, &c.edges, per)
+	}
+}
+
+// RegisterPreRewireResolver adds a resolver that runs after the Go type
+// pass and immediately before the unique-stub rewire.
+func RegisterPreRewireResolver(r Resolver) { preRewireResolvers = append(preRewireResolvers, r) }
+
+func (c *corpus) runPreRewireResolvers() {
+	per := c.fileResults()
+	for _, r := range preRewireResolvers {
+		r(c.root, &c.nodes, &c.edges, per)
+	}
+}
 
 // RegisterResolver adds a resolver run after the shared call pass.
 func RegisterResolver(r Resolver) { resolvers = append(resolvers, r) }
