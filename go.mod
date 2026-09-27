@@ -3,6 +3,7 @@ module github.com/rytsh/bag
 go 1.27.0
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/ledongthuc/pdf v0.0.0-20260907135840-6c8c28e0e8a0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
@@ -19,7 +20,6 @@ require (
 )
 
 require (
-	github.com/BurntSushi/toml v1.5.0 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/goccy/go-yaml v1.18.0 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect

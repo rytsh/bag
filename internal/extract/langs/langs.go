@@ -37,6 +37,7 @@ func init() {
 	reg("julia", ExtractJulia, ".jl")
 	extract.Register(&extract.Language{Name: "markdown", Extensions: []string{".md", ".mdx", ".qmd", ".skill"}, Extract: ExtractMarkdown, Document: true})
 
+	registerManifests()
 	registerTagsLanguages()
 
 	extract.RegisterTypeResolver(resolvePHPTypeReferences)

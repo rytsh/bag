@@ -399,6 +399,43 @@ func extract(path string, tree *tsx.Tree) *model.Extraction {
 			return
 		}
 
+		if t == "type_conversion_expression" {
+			// gotreesitter's Go grammar may parse `recv.method(func(){...})`
+			// as a conversion to a qualified type; treat it as a call.
+			if qt := n.Field("type"); qt != nil && qt.Type() == "qualified_type" {
+				pkg, name := qt.Field("package"), qt.Field("name")
+				if pkg != nil && name != nil {
+					recvName, callee := pkg.Text(), name.Text()
+					ip, isPkg := imported[recvName]
+
+					if !base.BuiltinGlobals.Has(callee) {
+						tgt := ""
+						if !isPkg {
+							tgt = labelToID[callee]
+						}
+
+						if tgt != "" && tgt != caller {
+							pair := [2]string{caller, tgt}
+							if !seenPairs[pair] {
+								seenPairs[pair] = true
+								b.AddEdgeCtx(caller, tgt, "calls", n.Line(), "call")
+							}
+						} else if tgt == "" {
+							rc := &model.RawCall{
+								CallerID: caller, Callee: callee, IsMemberCall: !isPkg, Language: "go",
+								SourceFile: path, SourceLocation: base.Loc(n.Line()),
+							}
+							if isPkg {
+								rc.Receiver, rc.ImportPath = recvName, ip
+							}
+
+							b.RawCalls = append(b.RawCalls, rc)
+						}
+					}
+				}
+			}
+		}
+
 		if t == "call_expression" {
 			fn := n.Field("function")
 			callee := ""
