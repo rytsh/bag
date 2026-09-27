@@ -49,19 +49,9 @@ func scalaTypeRefs(n *tsx.Node, generic bool, out *[]typeRef) {
 }
 
 func scalaImport(x *generic.Ctx, n *tsx.Node) [][2]string {
-	var parts []string
-
-	for i, c := range n.Children() {
-		if n.FieldNameForChild(i) == "path" && c.Type() == "identifier" {
-			parts = append(parts, c.Text())
-		}
-	}
-
-	raw := strings.Join(parts, ".")
-	if raw == "" {
-		if c := n.ChildOfType("stable_id", "identifier"); c != nil {
-			raw = c.Text()
-		}
+	raw := ""
+	if c := n.ChildOfType("stable_id", "identifier"); c != nil {
+		raw = c.Text()
 	}
 
 	mod := strings.Trim(lastSeg(raw, "."), "{} ")
@@ -961,6 +951,60 @@ func swiftClassHook(x *generic.Ctx, n *tsx.Node, classID string, line int) {
 	}
 }
 
+// swiftTypeChild returns the type node of a parameter/declaration. The
+// Python grammar exposes it via a "type"/"return_type" field; gotreesitter's
+// Swift grammar tags it as an unnamed-field type node after the name.
+func swiftTypeChild(n *tsx.Node, field string) *tsx.Node {
+	if t := n.Field(field); t != nil {
+		return t
+	}
+
+	return nil
+}
+
+var swiftTypeNodeTypes = base.NewSet("user_type", "array_type", "dictionary_type", "optional_type",
+	"implicitly_unwrapped_optional_type", "tuple_type", "function_type", "type_identifier")
+
+func swiftParamType(p *tsx.Node) *tsx.Node {
+	if t := swiftTypeChild(p, "type"); t != nil {
+		return t
+	}
+
+	for _, c := range p.NamedChildren() {
+		if swiftTypeNodeTypes.Has(c.Type()) {
+			return c
+		}
+	}
+
+	return nil
+}
+
+func swiftReturnType(fn *tsx.Node) *tsx.Node {
+	if t := swiftTypeChild(fn, "return_type"); t != nil {
+		return t
+	}
+
+	arrow := false
+
+	for _, c := range fn.Children() {
+		if c.Type() == "->" {
+			arrow = true
+
+			continue
+		}
+
+		if arrow && c.IsNamed() {
+			if swiftTypeNodeTypes.Has(c.Type()) {
+				return c
+			}
+
+			return nil
+		}
+	}
+
+	return nil
+}
+
 func swiftFunctionHook(x *generic.Ctx, n *tsx.Node, funcID string, line int) {
 	for _, p := range n.Children() {
 		if p.Type() != "parameter" {
@@ -968,11 +1012,11 @@ func swiftFunctionHook(x *generic.Ctx, n *tsx.Node, funcID string, line int) {
 		}
 
 		var refs []typeRef
-		swiftTypeRefs(p.Field("type"), false, &refs)
+		swiftTypeRefs(swiftParamType(p), false, &refs)
 		emitRefs(x, funcID, line, refs, "parameter_type")
 	}
 
-	if rt := n.Field("return_type"); rt != nil {
+	if rt := swiftReturnType(n); rt != nil {
 		var refs []typeRef
 		swiftTypeRefs(rt, false, &refs)
 		emitRefs(x, funcID, line, refs, "return_type")

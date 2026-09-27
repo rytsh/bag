@@ -38,6 +38,7 @@ func resolve(root string, per []fileResult, res *Result) {
 	c.canonicalizeFileIDs()
 	c.disambiguateCollidingIDs()
 	c.canonicalizeCSharpNamespaces()
+	c.runTypeResolvers()
 	c.resolveGoTypeReferences()
 	c.rewireUniqueStubs()
 	c.resolveCalls()

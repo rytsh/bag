@@ -158,7 +158,7 @@ func ExtractObjC(path, _ string, src []byte) *model.Extraction {
 					for _, s := range c.Children() {
 						if s.Type() == "type_name" {
 							for _, ti := range s.Children() {
-								if ti.Type() == "type_identifier" {
+								if ti.Type() == "type_identifier" || ti.Type() == "identifier" {
 									b.AddEdge(cls, ensure(ti.Text()), "implements", line)
 								}
 							}

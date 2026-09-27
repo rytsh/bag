@@ -405,7 +405,22 @@ func ktExtraWalk(x *generic.Ctx, n *tsx.Node, parentClass string) bool {
 		return true
 	case "property_declaration":
 		if parentClass == "" {
-			return false
+			owner := x.B.FileID
+			sawEq := false
+
+			for _, c := range n.Children() {
+				if !c.IsNamed() {
+					sawEq = sawEq || c.Type() == "="
+
+					continue
+				}
+
+				if sawEq {
+					x.AddInitializer(owner, c)
+				}
+			}
+
+			return true
 		}
 
 		var tn *tsx.Node
@@ -434,9 +449,30 @@ func ktExtraWalk(x *generic.Ctx, n *tsx.Node, parentClass string) bool {
 
 				x.Ref(parentClass, x.EnsureNamed(r.name), n.Line(), ctx)
 			}
+
+			ktEmitAnnotations(x, n, parentClass, n.Line())
 		}
 
-		return false
+		owner := parentClass
+		sawEq := false
+
+		for _, c := range n.Children() {
+			if !c.IsNamed() {
+				sawEq = sawEq || c.Type() == "="
+
+				continue
+			}
+
+			if sawEq {
+				x.AddInitializer(owner, c)
+			} else if c.Type() == "property_delegate" {
+				for _, s := range c.NamedChildren() {
+					x.AddInitializer(owner, s)
+				}
+			}
+		}
+
+		return true
 	}
 
 	return false

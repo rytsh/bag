@@ -17,16 +17,19 @@ type FileResult struct {
 	Ex   *model.Extraction
 }
 
-var resolvers []Resolver
+var (
+	resolvers     []Resolver
+	typeResolvers []Resolver
+)
 
 // RegisterResolver adds a resolver run after the shared call pass.
 func RegisterResolver(r Resolver) { resolvers = append(resolvers, r) }
 
-func (c *corpus) runLanguageResolvers() {
-	if len(resolvers) == 0 {
-		return
-	}
+// RegisterTypeResolver adds a resolver that runs after id disambiguation and
+// before the bare-label stub rewire (type-reference disambiguation).
+func RegisterTypeResolver(r Resolver) { typeResolvers = append(typeResolvers, r) }
 
+func (c *corpus) fileResults() []FileResult {
 	per := make([]FileResult, 0, len(c.per))
 	for _, fr := range c.per {
 		if fr.ex != nil {
@@ -34,6 +37,18 @@ func (c *corpus) runLanguageResolvers() {
 		}
 	}
 
+	return per
+}
+
+func (c *corpus) runTypeResolvers() {
+	per := c.fileResults()
+	for _, r := range typeResolvers {
+		r(c.root, &c.nodes, &c.edges, per)
+	}
+}
+
+func (c *corpus) runLanguageResolvers() {
+	per := c.fileResults()
 	for _, r := range resolvers {
 		r(c.root, &c.nodes, &c.edges, per)
 	}

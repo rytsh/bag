@@ -30,4 +30,12 @@ func init() {
 	reg("swift", ExtractSwift, ".swift")
 	reg("objc", ExtractDotM, ".m")
 	reg("objcpp", ExtractObjC, ".mm")
+	reg("rust", ExtractRust, ".rs")
+	reg("zig", ExtractZig, ".zig")
+	reg("bash", ExtractBash, ".sh", ".bash")
+	reg("elixir", ExtractElixir, ".ex", ".exs")
+	reg("julia", ExtractJulia, ".jl")
+
+	extract.RegisterTypeResolver(resolvePHPTypeReferences)
+	extract.RegisterTypeResolver(resolveJavaTypeReferences)
 }
