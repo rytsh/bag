@@ -36,6 +36,8 @@ func runExtract(ctx context.Context, args []string) error {
 	force := fs.Bool("force", false, "overwrite even if the new graph is smaller")
 	noCache := fs.Bool("no-cache", false, "disable the per-file AST cache")
 	noCluster := fs.Bool("no-cluster", false, "skip community detection")
+	noViz := fs.Bool("no-viz", false, "skip graph.html")
+	noReport := fs.Bool("no-report", false, "skip GRAPH_REPORT.md")
 
 	var excludes stringList
 	fs.Var(&excludes, "exclude", "extra gitignore-style exclude pattern (repeatable)")
@@ -71,6 +73,8 @@ func runExtract(ctx context.Context, args []string) error {
 		ExcludeHubsPercent: *excludeHubs,
 		Force:              *force,
 		NoCluster:          *noCluster,
+		NoViz:              *noViz,
+		NoReport:           *noReport,
 	}
 
 	if !*noCache {

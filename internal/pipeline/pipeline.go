@@ -11,12 +11,16 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"github.com/rytsh/bag/internal/analyze"
 	"github.com/rytsh/bag/internal/cluster"
 	"github.com/rytsh/bag/internal/detect"
+	"github.com/rytsh/bag/internal/export"
 	"github.com/rytsh/bag/internal/extract"
 	"github.com/rytsh/bag/internal/graph"
+	"github.com/rytsh/bag/internal/model"
+	"github.com/rytsh/bag/internal/report"
 )
 
 // Options configure a build.
@@ -31,6 +35,10 @@ type Options struct {
 	Cache              extract.Cache
 	Force              bool
 	NoCluster          bool
+	NoViz              bool
+	NoReport           bool
+	// Semantic, when set, extracts non-code files (docs/papers/images).
+	Semantic func(ctx context.Context, det *detect.Result) (*model.Extraction, error)
 }
 
 // Output is the result of a pipeline run.
@@ -41,9 +49,13 @@ type Output struct {
 	Cohesion    map[int]float64
 	Gods        []analyze.GodNode
 	Surprises   []analyze.Surprise
+	Questions   []analyze.Question
 	Detect      *detect.Result
 	Extract     *extract.Result
 	GraphPath   string
+	Root        string
+	OutDir      string
+	Tokens      [2]int
 }
 
 // Analysis is persisted next to graph.json (.graphify_analysis.json).
@@ -68,7 +80,7 @@ func OutDir(root, out string) string {
 	return filepath.Join(root, out)
 }
 
-// Run executes the full code pipeline.
+// Run executes the full pipeline.
 func Run(ctx context.Context, opt Options) (*Output, error) {
 	root, err := filepath.Abs(opt.Root)
 	if err != nil {
@@ -104,29 +116,62 @@ func Run(ctx context.Context, opt Options) (*Output, error) {
 		slog.Warn("files had syntax errors and may be partially extracted", "count", len(ex.SyntaxErrored))
 	}
 
-	g := graph.Build(ex.Nodes, ex.Edges, nil, root)
+	nodes, edges := ex.Nodes, ex.Edges
 
-	o := &Output{Graph: g, Detect: det, Extract: ex}
+	var hyper []*model.Hyperedge
 
-	if !opt.NoCluster {
-		o.Communities = cluster.Cluster(g, cluster.Options{Resolution: opt.Resolution, ExcludeHubsPercent: opt.ExcludeHubsPercent})
-		o.Cohesion = cluster.ScoreAll(g, o.Communities)
-		o.Labels = cluster.LabelByHub(g, o.Communities)
-		o.Gods = analyze.GodNodes(g, 10, opt.ExcludeHubsPercent)
-		o.Surprises = analyze.SurprisingConnections(g, o.Communities, 5)
+	o := &Output{Detect: det, Extract: ex, Root: root, OutDir: out}
+
+	if opt.Semantic != nil {
+		sem, err := opt.Semantic(ctx, det)
+		if err != nil {
+			slog.Warn("semantic extraction failed", "error", err)
+		} else if sem != nil {
+			nodes = append(nodes, sem.Nodes...)
+			edges = append(edges, sem.Edges...)
+			hyper = sem.Hyperedges
+		}
 	}
 
+	o.Graph = graph.Build(nodes, edges, hyper, root)
 	o.GraphPath = filepath.Join(out, "graph.json")
 
-	if err := o.Write(root, out, opt.Force); err != nil {
+	if !opt.NoCluster {
+		o.Analyze(opt.Resolution, opt.ExcludeHubsPercent)
+	}
+
+	if err := o.Write(opt.Force); err != nil {
 		return nil, err
+	}
+
+	if !opt.NoCluster && !opt.NoReport {
+		if err := o.WriteReport(); err != nil {
+			return nil, err
+		}
+	}
+
+	if !opt.NoCluster && !opt.NoViz {
+		if err := export.ToHTML(o.Graph, o.Communities, filepath.Join(out, "graph.html"), export.HTMLOptions{Labels: o.Labels}); err != nil {
+			slog.Warn("graph.html not written", "error", err)
+		}
 	}
 
 	return o, nil
 }
 
+// Analyze clusters and computes insights on o.Graph.
+func (o *Output) Analyze(resolution, excludeHubs float64) {
+	g := o.Graph
+	o.Communities = cluster.Cluster(g, cluster.Options{Resolution: resolution, ExcludeHubsPercent: excludeHubs})
+	o.Cohesion = cluster.ScoreAll(g, o.Communities)
+	o.Labels = cluster.LabelByHub(g, o.Communities)
+	o.Gods = analyze.GodNodes(g, 10, excludeHubs)
+	o.Surprises = analyze.SurprisingConnections(g, o.Communities, 5)
+	o.Questions = analyze.SuggestQuestions(g, o.Communities, o.Labels, 7)
+}
+
 // Write persists graph.json and the analysis sidecar.
-func (o *Output) Write(root, out string, force bool) error {
+func (o *Output) Write(force bool) error {
 	if !force {
 		if prev, err := graph.Load(o.GraphPath); err == nil && prev.G.NumNodes() > o.Graph.NumNodes() {
 			return fmt.Errorf("new graph has %d nodes but existing graph.json has %d; refusing to overwrite (use --force)",
@@ -136,7 +181,8 @@ func (o *Output) Write(root, out string, force bool) error {
 
 	if err := o.Graph.WriteJSON(o.GraphPath, graph.WriteOptions{
 		Communities: o.Communities,
-		Commit:      gitHead(root),
+		Labels:      o.Labels,
+		Commit:      GitHead(o.Root),
 	}); err != nil {
 		return fmt.Errorf("write graph.json; %w", err)
 	}
@@ -146,7 +192,7 @@ func (o *Output) Write(root, out string, force bool) error {
 		Cohesion:    map[string]float64{},
 		Gods:        o.Gods,
 		Surprises:   o.Surprises,
-		Tokens:      map[string]int{"input": 0, "output": 0},
+		Tokens:      map[string]int{"input": o.Tokens[0], "output": o.Tokens[1]},
 	}
 
 	for k, v := range o.Communities {
@@ -162,14 +208,73 @@ func (o *Output) Write(root, out string, force bool) error {
 		return err
 	}
 
-	if err := graph.WriteFileAtomic(filepath.Join(out, ".graphify_analysis.json"), raw); err != nil {
+	if err := graph.WriteFileAtomic(filepath.Join(o.OutDir, ".graphify_analysis.json"), raw); err != nil {
 		return err
 	}
 
-	return os.WriteFile(filepath.Join(out, ".graphify_root"), []byte(root), 0o644)
+	return os.WriteFile(filepath.Join(o.OutDir, ".graphify_root"), []byte(o.Root), 0o644)
 }
 
-func gitHead(dir string) string {
+// WriteReport renders GRAPH_REPORT.md.
+func (o *Output) WriteReport() error {
+	in := report.Input{
+		Graph: o.Graph, Communities: o.Communities, Cohesion: o.Cohesion, Labels: o.Labels,
+		Gods: o.Gods, Surprises: o.Surprises, Questions: o.Questions, Root: o.Root,
+		Commit: GitHead(o.Root), InputTokens: o.Tokens[0], OutTokens: o.Tokens[1],
+	}
+
+	if o.Detect != nil {
+		in.TotalFiles = o.Detect.TotalFiles
+		in.TotalWords = CountWords(o.Detect)
+	} else {
+		in.Warning = "cluster-only mode — file stats not available"
+	}
+
+	return graph.WriteFileAtomic(filepath.Join(o.OutDir, "GRAPH_REPORT.md"), []byte(report.Generate(in)))
+}
+
+// FromGraph re-analyzes an existing graph.json (cluster-only).
+func FromGraph(graphPath string) (*Output, error) {
+	l, err := graph.Load(graphPath)
+	if err != nil {
+		return nil, err
+	}
+
+	out := filepath.Dir(graphPath)
+
+	root := filepath.Dir(out)
+	if raw, err := os.ReadFile(filepath.Join(out, ".graphify_root")); err == nil {
+		root = strings.TrimSpace(string(raw))
+	}
+
+	return &Output{Graph: l.G, Communities: l.Communities, Labels: l.Labels, GraphPath: graphPath, OutDir: out, Root: root}, nil
+}
+
+// CountWords approximates the corpus word count.
+func CountWords(det *detect.Result) int {
+	total := 0
+
+	for _, files := range det.Files {
+		for _, f := range files {
+			st, err := os.Stat(f)
+			if err != nil || st.Size() > 5<<20 {
+				continue
+			}
+
+			raw, err := os.ReadFile(f)
+			if err != nil {
+				continue
+			}
+
+			total += len(strings.FieldsFunc(string(raw), unicode.IsSpace))
+		}
+	}
+
+	return total
+}
+
+// GitHead returns HEAD for the repo containing dir, or "".
+func GitHead(dir string) string {
 	cmd := exec.Command("git", "-C", dir, "rev-parse", "HEAD")
 
 	b, err := cmd.Output()

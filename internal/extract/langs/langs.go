@@ -36,6 +36,8 @@ func init() {
 	reg("elixir", ExtractElixir, ".ex", ".exs")
 	reg("julia", ExtractJulia, ".jl")
 
+	registerTagsLanguages()
+
 	extract.RegisterTypeResolver(resolvePHPTypeReferences)
 	extract.RegisterTypeResolver(resolveJavaTypeReferences)
 }
