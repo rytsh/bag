@@ -1,0 +1,219 @@
+{
+ "normalize": [
+  {
+   "in": "İslemYap",
+   "norm": "i_slemyap"
+  },
+  {
+   "in": "Hello World",
+   "norm": "hello_world"
+  },
+  {
+   "in": "foo.bar/baz",
+   "norm": "foo_bar_baz"
+  },
+  {
+   "in": "__init__",
+   "norm": "init"
+  },
+  {
+   "in": "ǅemal",
+   "norm": "džemal"
+  },
+  {
+   "in": "ﬁle",
+   "norm": "file"
+  },
+  {
+   "in": "Straße",
+   "norm": "strasse"
+  },
+  {
+   "in": "ΣΊΣΥΦΟΣ",
+   "norm": "σίσυφοσ"
+  },
+  {
+   "in": "日本語_テスト",
+   "norm": "日本語_テスト"
+  },
+  {
+   "in": "a--b__c",
+   "norm": "a_b_c"
+  },
+  {
+   "in": "  x  ",
+   "norm": "x"
+  },
+  {
+   "in": "café-au-lait",
+   "norm": "café_au_lait"
+  },
+  {
+   "in": "́ͅx",
+   "norm": "ίx"
+  },
+  {
+   "in": "tr/ığüşöç.go",
+   "norm": "tr_ığüşöç_go"
+  },
+  {
+   "in": "pkg/sub/Server",
+   "norm": "pkg_sub_server"
+  },
+  {
+   "in": "..",
+   "norm": ""
+  },
+  {
+   "in": "",
+   "norm": ""
+  },
+  {
+   "in": "x.y.z()",
+   "norm": "x_y_z"
+  },
+  {
+   "in": "Ǳ",
+   "norm": "dz"
+  },
+  {
+   "in": "ẞ",
+   "norm": "ss"
+  },
+  {
+   "in": "Ω",
+   "norm": "ω"
+  },
+  {
+   "in": "ﬀ",
+   "norm": "ff"
+  },
+  {
+   "in": "Å",
+   "norm": "å"
+  },
+  {
+   "in": "½",
+   "norm": "1_2"
+  },
+  {
+   "in": "①",
+   "norm": "1"
+  },
+  {
+   "in": "é",
+   "norm": "é"
+  },
+  {
+   "in": "İ",
+   "norm": "i"
+  },
+  {
+   "in": "ΐ",
+   "norm": "ΐ"
+  },
+  {
+   "in": "a​b",
+   "norm": "a_b"
+  },
+  {
+   "in": "٣",
+   "norm": "٣"
+  },
+  {
+   "in": "x_y",
+   "norm": "x_y"
+  },
+  {
+   "in": "ᾴ",
+   "norm": "αί"
+  },
+  {
+   "in": "ﬅ",
+   "norm": "st"
+  },
+  {
+   "in": "Σ",
+   "norm": "σ"
+  },
+  {
+   "in": "ς",
+   "norm": "σ"
+  },
+  {
+   "in": "K",
+   "norm": "k"
+  },
+  {
+   "in": "㎒",
+   "norm": "mhz"
+  },
+  {
+   "in": "ℌ",
+   "norm": "h"
+  },
+  {
+   "in": "Ⅻ",
+   "norm": "xii"
+  },
+  {
+   "in": "ǰ",
+   "norm": "ǰ"
+  },
+  {
+   "in": "ŉ",
+   "norm": "ʼn"
+  },
+  {
+   "in": "ﬓ",
+   "norm": "մն"
+  },
+  {
+   "in": "ı",
+   "norm": "ı"
+  },
+  {
+   "in": "ſ",
+   "norm": "s"
+  }
+ ],
+ "make": [
+  {
+   "in": [
+    "pkg/sub/server",
+    "",
+    "Server"
+   ],
+   "id": "pkg_sub_server_server"
+  },
+  {
+   "in": [
+    "_a_",
+    ".b."
+   ],
+   "id": "a_b"
+  },
+  {
+   "in": [
+    "",
+    "x"
+   ],
+   "id": "x"
+  },
+  {
+   "in": [
+    "main",
+    "compute_score"
+   ],
+   "id": "main_compute_score"
+  },
+  {
+   "in": [
+    "go",
+    "pkg",
+    "net/http"
+   ],
+   "id": "go_pkg_net_http"
+  }
+ ]
+}

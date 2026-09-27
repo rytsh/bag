@@ -1,0 +1,6 @@
+/bag
+/dist/
+graphify-out/
+bag-out/
+*.test
+*.out
