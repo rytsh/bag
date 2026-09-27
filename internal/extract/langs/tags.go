@@ -10,6 +10,7 @@ import (
 
 	"github.com/rytsh/bag/internal/extract"
 	"github.com/rytsh/bag/internal/extract/base"
+	"github.com/rytsh/bag/internal/extract/tsx"
 	"github.com/rytsh/bag/internal/ids"
 	"github.com/rytsh/bag/internal/model"
 )
@@ -197,6 +198,51 @@ func makeTagsExtractor(entry grammars.LangEntry) extract.Extractor {
 
 		seen := map[[2]string]bool{}
 
+		emitCall := func(caller, name string, line int) {
+			if name == "" || base.BuiltinGlobals.Has(name) {
+				return
+			}
+
+			if tgt := labelToID[name]; tgt != "" {
+				if tgt == caller {
+					return
+				}
+
+				pair := [2]string{caller, tgt}
+				if !seen[pair] {
+					seen[pair] = true
+					b.AddEdgeCtx(caller, tgt, "calls", line, "call")
+				}
+
+				return
+			}
+
+			b.RawCalls = append(b.RawCalls, &model.RawCall{
+				CallerID: caller, Callee: name, Language: lang,
+				SourceFile: path, SourceLocation: base.Loc(line),
+			})
+		}
+
+		if tree, err := tsx.Parse(lang, src); err == nil {
+			tree.Root.Walk(func(n *tsx.Node) bool {
+				if !isCallNodeType(n.Type()) {
+					return true
+				}
+
+				caller := enclosing(n.StartByte())
+				if caller == "" {
+					return true
+				}
+
+				if name := calleeName(n); name != "" {
+					emitCall(caller, name, n.Line())
+				}
+
+				return true
+			})
+			tree.Release()
+		}
+
 		for _, t := range tags {
 			if !strings.HasPrefix(t.Kind, "reference.") {
 				continue
@@ -222,38 +268,87 @@ func makeTagsExtractor(entry grammars.LangEntry) extract.Extractor {
 				continue
 			}
 
-			if kind != "call" && kind != "send" && kind != "method" && kind != "function" {
-				if kind == "class" || kind == "type" || kind == "implementation" || kind == "interface" {
-					if tgt := labelToID[name]; tgt != "" && tgt != caller {
-						pair := [2]string{caller, tgt}
-						if !seen[pair] {
-							seen[pair] = true
-							b.AddEdgeCtx(caller, tgt, "references", line, "type")
-						}
+			if kind == "class" || kind == "type" || kind == "implementation" || kind == "interface" {
+				if tgt := labelToID[name]; tgt != "" && tgt != caller {
+					pair := [2]string{caller, tgt}
+					if !seen[pair] {
+						seen[pair] = true
+						b.AddEdgeCtx(caller, tgt, "references", line, "type")
 					}
 				}
 
 				continue
 			}
 
-			if tgt := labelToID[name]; tgt != "" && tgt != caller {
-				pair := [2]string{caller, tgt}
-				if !seen[pair] {
-					seen[pair] = true
-					b.AddEdgeCtx(caller, tgt, "calls", line, "call")
-				}
-
-				continue
+			if kind == "call" || kind == "send" || kind == "method" || kind == "function" {
+				emitCall(caller, name, line)
 			}
-
-			b.RawCalls = append(b.RawCalls, &model.RawCall{
-				CallerID: caller, Callee: name, Language: lang,
-				SourceFile: path, SourceLocation: base.Loc(line),
-			})
 		}
 
 		return b.Result()
 	}
+}
+
+// callNodeTypes are grammar node types that represent a call across the
+// tags-covered languages.
+var callNodeTypes = base.NewSet("call", "call_expression", "function_call", "method_call", "method_invocation",
+	"invocation_expression", "application_expression", "apply", "application", "function_call_expression",
+	"call_command", "command_call", "message_expression", "list_lit")
+
+func isCallNodeType(t string) bool { return callNodeTypes.Has(t) }
+
+var identTypes = base.NewSet("identifier", "simple_identifier", "sym_lit", "variable", "atom", "name",
+	"value_name", "field_identifier", "property_identifier", "function_identifier", "word")
+
+// calleeName extracts the called name from a generic call node.
+func calleeName(n *tsx.Node) string {
+	for _, f := range []string{"function", "name", "method", "callee", "expr"} {
+		if c := n.Field(f); c != nil {
+			return lastIdent(c)
+		}
+	}
+
+	nc := n.NamedChildren()
+	if len(nc) == 0 {
+		return ""
+	}
+
+	if n.Type() == "list_lit" {
+		// clojure: (fn args...)
+		if nc[0].Type() == "sym_lit" {
+			return strings.TrimSpace(lastSeg(nc[0].Text(), "/"))
+		}
+
+		return ""
+	}
+
+	return lastIdent(nc[0])
+}
+
+func lastIdent(n *tsx.Node) string {
+	if identTypes.Has(n.Type()) {
+		return strings.TrimSpace(n.Text())
+	}
+
+	switch n.Type() {
+	case "value_path", "long_identifier", "qualified_identifier", "scoped_identifier", "field_expression",
+		"member_expression", "selector_expression", "navigation_expression", "dot_expression", "remote":
+		nc := n.NamedChildren()
+		if len(nc) > 0 {
+			return lastIdent(nc[len(nc)-1])
+		}
+	}
+
+	if nc := n.NamedChildren(); len(nc) == 1 {
+		return lastIdent(nc[0])
+	}
+
+	t := strings.TrimSpace(n.Text())
+	if len(t) > 64 || strings.ContainsAny(t, " \n\t(){}[]\"'") {
+		return ""
+	}
+
+	return lastSeg(lastSeg(t, "."), ":")
 }
 
 func isCallableKind(kind string) bool {

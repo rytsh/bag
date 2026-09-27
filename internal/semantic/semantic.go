@@ -100,7 +100,7 @@ func New(cfg Config) (*Client, error) {
 	}
 
 	opts := []ok.OptionClientFn{
-		ok.WithBaseURL(strings.TrimRight(cfg.BaseURL, "/")),
+		ok.WithBaseURL(strings.TrimRight(cfg.BaseURL, "/") + "/"),
 		ok.WithTimeout(cfg.Timeout),
 		ok.WithHeaderSet("Content-Type", "application/json"),
 	}
@@ -169,7 +169,7 @@ func (c *Client) chat(ctx context.Context, content any) (string, int, int, error
 		return "", 0, 0, err
 	}
 
-	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, "/chat/completions", bytes.NewReader(body))
+	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, "chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return "", 0, 0, err
 	}
