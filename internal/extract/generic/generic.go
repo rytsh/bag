@@ -77,6 +77,9 @@ type Ctx struct {
 	Path string
 	Root string
 
+	// ParentClass is the enclosing class id while a ClassHook runs.
+	ParentClass string
+
 	// SymbolID, when set, rewrites a plain function id (collision salting).
 	SymbolID func(plain, name string) string
 	// Data holds language-specific per-file state.
@@ -87,6 +90,7 @@ type Ctx struct {
 
 	bodies       []body
 	caller       string
+	parentOf     map[string]string
 	callable     map[string]bool
 	callableCls  map[string]bool
 	initializers []body
@@ -275,7 +279,9 @@ func run(cfg *Config, path, root string, tree *tsx.Tree) *model.Extraction {
 			}
 
 			if cfg.ClassHook != nil {
+				x.ParentClass = parentClass
 				cfg.ClassHook(x, n, classID, line)
+				x.ParentClass = ""
 			}
 
 			if bd := cfg.FindBody(n); bd != nil {
@@ -310,50 +316,14 @@ func run(cfg *Config, path, root string, tree *tsx.Tree) *model.Extraction {
 			}
 
 			if funcName == "" {
-				if cfg.ExtraWalk != nil && cfg.ExtraWalk(x, n, parentClass) {
-					return
+				if cfg.ExtraWalk != nil {
+					cfg.ExtraWalk(x, n, parentClass)
 				}
 
 				return
 			}
 
-			sanitized := funcName
-			if cfg.SanitizeName != nil {
-				sanitized = cfg.SanitizeName(funcName)
-			}
-
-			if ids.NormalizeID(sanitized) == "" {
-				return
-			}
-
-			line := n.Line()
-
-			var funcID string
-
-			paren := "()"
-			if cfg.FunctionLabelNoParens {
-				paren = ""
-			}
-
-			if parentClass != "" {
-				funcID = x.symbolID(ids.MakeID(parentClass, sanitized), sanitized)
-				b.AddNode(funcID, "."+funcName+paren, line)
-				b.AddEdge(parentClass, funcID, "method", line)
-			} else {
-				funcID = x.symbolID(ids.MakeID(b.Stem, sanitized), sanitized)
-				b.AddNode(funcID, funcName+paren, line)
-				b.AddEdge(b.FileID, funcID, "contains", line)
-			}
-
-			x.MarkCallable(funcID, false)
-
-			if cfg.FunctionHook != nil {
-				cfg.FunctionHook(x, n, funcID, line)
-			}
-
-			if bd := cfg.FindBody(n); bd != nil {
-				x.AddBody(funcID, bd)
-			}
+			x.WalkFunctionNamed(n, parentClass, funcName)
 
 			return
 		}
@@ -397,6 +367,60 @@ func run(cfg *Config, path, root string, tree *tsx.Tree) *model.Extraction {
 
 	return res
 }
+
+// WalkFunctionNamed emits a function/method node for n with the given name.
+func (x *Ctx) WalkFunctionNamed(n *tsx.Node, parentClass, funcName string) string {
+	cfg, b := x.Cfg, x.B
+
+	sanitized := funcName
+	if cfg.SanitizeName != nil {
+		sanitized = cfg.SanitizeName(funcName)
+	}
+
+	if ids.NormalizeID(sanitized) == "" {
+		return ""
+	}
+
+	line := n.Line()
+
+	paren := "()"
+	if cfg.FunctionLabelNoParens {
+		paren = ""
+	}
+
+	var funcID string
+
+	if parentClass != "" {
+		funcID = x.symbolID(ids.MakeID(parentClass, sanitized), sanitized)
+		b.AddNode(funcID, "."+funcName+paren, line)
+		b.AddEdge(parentClass, funcID, "method", line)
+	} else {
+		funcID = x.symbolID(ids.MakeID(b.Stem, sanitized), sanitized)
+		b.AddNode(funcID, funcName+paren, line)
+		b.AddEdge(b.FileID, funcID, "contains", line)
+	}
+
+	x.MarkCallable(funcID, false)
+
+	if x.parentOf == nil {
+		x.parentOf = map[string]string{}
+	}
+
+	x.parentOf[funcID] = parentClass
+
+	if cfg.FunctionHook != nil {
+		cfg.FunctionHook(x, n, funcID, line)
+	}
+
+	if bd := cfg.FindBody(n); bd != nil {
+		x.AddBody(funcID, bd)
+	}
+
+	return funcID
+}
+
+// ParentOf returns the enclosing class id of an emitted function.
+func (x *Ctx) ParentOf(funcID string) string { return x.parentOf[funcID] }
 
 func (x *Ctx) symbolID(plain, name string) string {
 	if x.SymbolID != nil {

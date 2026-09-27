@@ -130,6 +130,10 @@ func Run(ctx context.Context, paths []string, opt Options) (*Result, error) {
 			continue
 		}
 
+		if fr.ex.Skipped {
+			continue
+		}
+
 		if fr.ex.Error != "" || len(fr.ex.Nodes) == 0 {
 			res.Failed = append(res.Failed, fr.path)
 		} else {

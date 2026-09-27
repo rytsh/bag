@@ -95,6 +95,8 @@ type Extraction struct {
 
 	Error       string
 	ParseErrors bool
+	// Skipped marks files an extractor declined by design (not a failure).
+	Skipped bool
 }
 
 // Merge appends other into e.
