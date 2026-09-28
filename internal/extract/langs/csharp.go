@@ -320,7 +320,11 @@ func csClassHook(x *generic.Ctx, n *tsx.Node, classID string, line int) {
 
 	if nn := b.Get(classID); nn != nil {
 		if x.ParentClass != "" {
-			nn.Metadata = map[string]any{"is_nested_type": true}
+			if nn.Metadata == nil {
+				nn.Metadata = map[string]any{}
+			}
+
+			nn.Metadata["is_nested_type"] = true
 		}
 
 		if t == "class_declaration" || t == "struct_declaration" || t == "interface_declaration" || t == "record_declaration" {
@@ -398,6 +402,10 @@ func csClassHook(x *generic.Ctx, n *tsx.Node, classID string, line int) {
 					continue
 				}
 
+				if pn, recv := p.Field("name"), csReceiverTypeName(p.Field("type")); pn != nil && recv != "" && !tps.Has(recv) {
+					csRecordField(x, classID, pn.Text(), recv)
+				}
+
 				var refs []csRef
 				csTypeRefs(p.Field("type"), false, &refs, tps)
 				csEmit(x, classID, p.Line(), refs, "field")
@@ -408,6 +416,8 @@ func csClassHook(x *generic.Ctx, n *tsx.Node, classID string, line int) {
 
 func csFunctionHook(x *generic.Ctx, n *tsx.Node, funcID string, line int) {
 	tps := csTypeParams(n)
+
+	csRecordMethodScope(x, n, funcID)
 
 	if params := n.Field("parameters"); params != nil {
 		for _, p := range params.Children() {
@@ -487,7 +497,7 @@ func csExtraWalk(x *generic.Ctx, n *tsx.Node, parentClass string) bool {
 			if !b.Has(id) {
 				nn := b.AddNode(id, label, n.Line())
 				nn.Type = "namespace"
-				nn.Metadata = map[string]any{"kind": "csharp_namespace"}
+				nn.Metadata = map[string]any{"kind": "csharp_namespace", "namespace": label}
 			}
 
 			b.AddEdge(b.FileID, id, "contains", n.Line())
@@ -536,6 +546,25 @@ func csExtraWalk(x *generic.Ctx, n *tsx.Node, parentClass string) bool {
 			return true
 		}
 
+		if upperStart(name) {
+			if vd := n.ChildOfType("variable_declaration"); vd != nil {
+				for _, d := range vd.Children() {
+					if d.Type() != "variable_declarator" {
+						continue
+					}
+
+					nn := d.Field("name")
+					if nn == nil {
+						nn = d.ChildOfType("identifier")
+					}
+
+					if nn != nil {
+						csRecordField(x, parentClass, nn.Text(), name)
+					}
+				}
+			}
+		}
+
 		var refs []csRef
 		csTypeRefs(tn, false, &refs, tps)
 		csEmit(x, parentClass, n.Line(), refs, "field")
@@ -555,6 +584,10 @@ func csExtraWalk(x *generic.Ctx, n *tsx.Node, parentClass string) bool {
 		}
 
 		if tn := n.Field("type"); tn != nil {
+			if pn := n.Field("name"); pn != nil {
+				csRecordField(x, parentClass, pn.Text(), csReceiverTypeName(tn))
+			}
+
 			var refs []csRef
 			csTypeRefs(tn, false, &refs, nil)
 			csEmit(x, parentClass, n.Line(), refs, "field")
@@ -684,7 +717,17 @@ var csharpConfig = &generic.Config{
 	FunctionHook:      csFunctionHook,
 	ExtraWalk:         csExtraWalk,
 	CallName:          csCallName,
-	DeferMember:       func(member bool, recv string) bool { return member && recv != "" },
+	DecorateRawCall:   csDecorateRawCall,
+	DeferStubTarget: func(n *tsx.Node) bool {
+		if n.Type() != "object_creation_expression" {
+			return false
+		}
+
+		_, q, qual, ok := csReadTypeName(n.Field("type"))
+
+		return ok && q && qual != ""
+	},
+	DeferMember: func(member bool, recv string) bool { return member && recv != "" },
 	PreScan: func(x *generic.Ctx) {
 		x.Data["cs_ifaces"] = csInterfaceNames(x.Tree.Root)
 	},

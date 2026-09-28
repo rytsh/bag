@@ -1,6 +1,7 @@
 package langs
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/rytsh/bag/internal/extract/base"
@@ -71,8 +72,85 @@ func rustTypeRefs(n *tsx.Node, generic bool, out *[]typeRef) {
 }
 
 type rustBody struct {
-	id   string
-	node *tsx.Node
+	id       string
+	node     *tsx.Node
+	selfType string
+	implKey  string
+}
+
+// rustSimpleGenericImplKey returns "Owner/arity" for an inherent
+// `impl<T, U> Owner<T, U>` with plain parameters in declaration order.
+//
+// Adapted from Graphify's _rust_simple_generic_impl_key (Apache-2.0).
+func rustSimpleGenericImplKey(n *tsx.Node) string {
+	if n.Field("trait") != nil {
+		return ""
+	}
+
+	params, owner := n.Field("type_parameters"), n.Field("type")
+	if params == nil || owner == nil || owner.Type() != "generic_type" {
+		return ""
+	}
+
+	for _, c := range n.NamedChildren() {
+		if c.Type() == "where_clause" {
+			return ""
+		}
+	}
+
+	var names []string
+
+	seen := map[string]bool{}
+
+	for _, p := range params.NamedChildren() {
+		if p.Type() != "type_parameter" {
+			return ""
+		}
+
+		nc := p.NamedChildren()
+		if len(nc) != 1 || nc[0].Type() != "type_identifier" {
+			return ""
+		}
+
+		name := nc[0].Text()
+		if name == "" || seen[name] {
+			return ""
+		}
+
+		seen[name] = true
+		names = append(names, name)
+	}
+
+	if len(names) == 0 {
+		return ""
+	}
+
+	ot := owner.Field("type")
+	if ot == nil || ot.Type() != "type_identifier" {
+		return ""
+	}
+
+	args := owner.ChildOfType("type_arguments")
+	if args == nil {
+		return ""
+	}
+
+	an := args.NamedChildren()
+	if len(an) != len(names) {
+		return ""
+	}
+
+	for i, a := range an {
+		if a.Type() != "type_identifier" || a.Text() != names[i] {
+			return ""
+		}
+	}
+
+	if ot.Text() == "" {
+		return ""
+	}
+
+	return ot.Text() + "/" + strconv.Itoa(len(names))
 }
 
 // ExtractRust extracts a Rust file.
@@ -89,6 +167,12 @@ func ExtractRust(path, _ string, src []byte) *model.Extraction {
 	ensure := func(name string) string { return b.EnsureNamed(b.Stem, name) }
 
 	var bodies []rustBody
+
+	// The enclosing impl block's bare self type and generic key while its
+	// body is walked.
+	var curSelfType, curImplKey string
+
+	implKeys := map[string]*string{}
 
 	emitRefs := func(fn *tsx.Node, fid string, line int) {
 		if params := fn.Field("parameters"); params != nil {
@@ -175,7 +259,12 @@ func ExtractRust(path, _ string, src []byte) *model.Extraction {
 
 			if t == "function_item" {
 				if bd := n.Field("body"); bd != nil {
-					bodies = append(bodies, rustBody{fid, bd})
+					st, ik := "", ""
+					if impl != "" {
+						st, ik = curSelfType, curImplKey
+					}
+
+					bodies = append(bodies, rustBody{id: fid, node: bd, selfType: st, implKey: ik})
 				}
 			}
 
@@ -188,7 +277,7 @@ func ExtractRust(path, _ string, src []byte) *model.Extraction {
 
 			line := n.Line()
 			item := ids.MakeID(b.Stem, nn.Text())
-			b.AddNode(item, nn.Text(), line)
+			b.AddNode(item, nn.Text(), line).RustDeclCount++
 			b.AddEdge(b.FileID, item, "contains", line)
 
 			switch t {
@@ -308,12 +397,14 @@ func ExtractRust(path, _ string, src []byte) *model.Extraction {
 			return
 		case "impl_item":
 			tn, trait := n.Field("type"), n.Field("trait")
-			implID := ""
+			implID, selfType, implKey := "", "", ""
 
 			if tn != nil {
 				typeName := strings.TrimSpace(tn.Text())
 				implID = ids.MakeID(b.Stem, typeName)
 				b.AddNode(implID, typeName, n.Line())
+				implKey = rustSimpleGenericImplKey(n)
+				selfType = strings.TrimSpace(strings.SplitN(typeName, "<", 2)[0])
 			}
 
 			if trait != nil && implID != "" {
@@ -335,9 +426,38 @@ func ExtractRust(path, _ string, src []byte) *model.Extraction {
 			}
 
 			if bd := n.Field("body"); bd != nil {
+				hasMethods := false
+
+				for _, c := range bd.Children() {
+					if c.Type() == "function_item" || c.Type() == "function_signature_item" {
+						hasMethods = true
+
+						break
+					}
+				}
+
+				if implID != "" && hasMethods {
+					k := implKey
+					if prev, ok := implKeys[implID]; !ok {
+						implKeys[implID] = &k
+					} else if *prev != implKey {
+						empty := ""
+						implKeys[implID] = &empty
+					}
+
+					if node := b.Get(implID); node != nil {
+						node.RustImplKey = *implKeys[implID]
+					}
+				}
+
+				prevST, prevIK := curSelfType, curImplKey
+				curSelfType, curImplKey = selfType, implKey
+
 				for _, c := range bd.Children() {
 					walk(c, implID)
 				}
+
+				curSelfType, curImplKey = prevST, prevIK
 			}
 
 			return
@@ -368,15 +488,15 @@ func ExtractRust(path, _ string, src []byte) *model.Extraction {
 
 	seen := map[[2]string]bool{}
 
-	var wc func(n *tsx.Node, caller string)
-	wc = func(n *tsx.Node, caller string) {
+	var wc func(n *tsx.Node, caller string, bd rustBody)
+	wc = func(n *tsx.Node, caller string, bd rustBody) {
 		if n.Type() == "function_item" {
 			return
 		}
 
 		if n.Type() == "call_expression" {
 			fn := n.Field("function")
-			callee, member, scoped := "", false, false
+			callee, member, scoped, selfCall := "", false, false, false
 
 			if fn != nil {
 				switch fn.Type() {
@@ -386,6 +506,10 @@ func ExtractRust(path, _ string, src []byte) *model.Extraction {
 					member = true
 					if f := fn.Field("field"); f != nil {
 						callee = f.Text()
+					}
+
+					if v := fn.Field("value"); v != nil && v.Type() == "self" {
+						selfCall = true
 					}
 				case "scoped_identifier":
 					scoped = true
@@ -406,21 +530,26 @@ func ExtractRust(path, _ string, src []byte) *model.Extraction {
 						b.AddEdgeCtx(caller, tgt, "calls", n.Line(), "call")
 					}
 				case tgt == "" && !scoped && !rustTraitMethodBlocklist.Has(strings.ToLower(callee)):
-					b.RawCalls = append(b.RawCalls, &model.RawCall{
+					rc := &model.RawCall{
 						CallerID: caller, Callee: callee, IsMemberCall: member, Language: "rust",
 						SourceFile: path, SourceLocation: base.Loc(n.Line()),
-					})
+					}
+					if selfCall && bd.selfType != "" {
+						rc.RustSelfType, rc.RustSelfImplKey = bd.selfType, bd.implKey
+					}
+
+					b.RawCalls = append(b.RawCalls, rc)
 				}
 			}
 		}
 
 		for _, c := range n.Children() {
-			wc(c, caller)
+			wc(c, caller, bd)
 		}
 	}
 
 	for _, bd := range bodies {
-		wc(bd.node, bd.id)
+		wc(bd.node, bd.id, bd)
 	}
 
 	res := b.Result()

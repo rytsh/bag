@@ -36,6 +36,7 @@ func resolve(root string, per []fileResult, res *Result) {
 	}
 
 	c.runSymbolResolvers()
+	c.mergeDeclDefClasses()
 	c.canonicalizeFileIDs()
 	c.disambiguateCollidingIDs()
 	c.canonicalizeCSharpNamespaces()
@@ -43,6 +44,7 @@ func resolve(root string, per []fileResult, res *Result) {
 	c.resolveGoTypeReferences()
 	c.runPreRewireResolvers()
 	c.rewireUniqueStubs()
+	c.runPostRewireResolvers()
 	c.resolveCalls()
 	c.repointGoImports()
 	c.runLanguageResolvers()
@@ -75,6 +77,34 @@ func (c *corpus) canonicalizeFileIDs() {
 
 		if oldPref := base.FileNodeID(fr.path); oldPref != newID {
 			prefixRemap[fr.path] = [2]string{oldPref, newID}
+		}
+	}
+
+	// Import targets resolved to in-root files that were not extracted (an
+	// imported .png/.css) have no node; canonicalize their ids too.
+	seen := map[string]bool{}
+	for _, fr := range c.per {
+		seen[fr.path] = true
+	}
+
+	for _, e := range c.edges {
+		tf := e.TargetFile
+		if tf == "" || seen[tf] {
+			continue
+		}
+
+		seen[tf] = true
+
+		if !isRegularFile(tf) {
+			continue
+		}
+
+		if rel := relPath(c.root, tf); rel != "" {
+			if old, nid := ids.MakeID(tf), base.FileNodeID(rel); old != nid {
+				if _, ok := idRemap[old]; !ok {
+					idRemap[old] = nid
+				}
+			}
 		}
 	}
 
@@ -122,6 +152,144 @@ func (c *corpus) canonicalizeFileIDs() {
 
 	for _, rc := range c.rawCalls {
 		rc.CallerID = remap(rc.CallerID)
+	}
+
+	c.repointBarrelSymbols()
+}
+
+// repointBarrelSymbols follows symbol-level imports/re-exports that name a
+// symbol through a barrel file (which defines nothing) to the defining symbol
+// via the barrel's own re_exports edges, one hop per pass. A target no chain
+// resolves keeps a canonical-prefixed (dangling) id.
+//
+// Adapted from Graphify's extract() barrel repoint pass (#1983, Apache-2.0).
+func (c *corpus) repointBarrelSymbols() {
+	type forms struct {
+		canonical string
+		prefixes  []string
+	}
+
+	stemForms := map[string]forms{}
+	register := func(p string) {
+		if _, ok := stemForms[p]; ok {
+			return
+		}
+
+		rel := relPath(c.root, p)
+		if rel == "" {
+			return
+		}
+
+		nid := base.FileNodeID(rel)
+		f := forms{canonical: nid}
+
+		if r, err := filepath.EvalSymlinks(p); err == nil && r != p {
+			f.prefixes = append(f.prefixes, base.FileNodeID(r))
+		}
+
+		f.prefixes = append(f.prefixes, base.FileNodeID(p), nid)
+		stemForms[p] = f
+	}
+
+	for _, fr := range c.per {
+		register(fr.path)
+	}
+
+	for _, e := range c.edges {
+		if e.TargetFile != "" && isRegularFile(e.TargetFile) {
+			register(e.TargetFile)
+		}
+	}
+
+	owned := make(map[string]bool, len(c.nodes))
+	for _, n := range c.nodes {
+		owned[n.ID] = true
+	}
+
+	decompose := func(target, tf string) (string, string, bool) {
+		f, ok := stemForms[tf]
+		if !ok {
+			return "", "", false
+		}
+
+		for _, p := range f.prefixes {
+			if p != "" && strings.HasPrefix(target, p+"_") {
+				return f.canonical, target[len(p)+1:], true
+			}
+		}
+
+		return "", "", false
+	}
+
+	chain := map[[2]string]map[string]bool{}
+	learn := func(k [2]string, tgt string) {
+		if chain[k] == nil {
+			chain[k] = map[string]bool{}
+		}
+
+		chain[k][tgt] = true
+	}
+
+	for _, e := range c.edges {
+		if e.Relation != "re_exports" || e.TargetFile == "" || !owned[e.Target] {
+			continue
+		}
+
+		if _, sym, ok := decompose(e.Target, e.TargetFile); ok {
+			learn([2]string{e.Source, sym}, e.Target)
+		}
+	}
+
+	var pending []*model.Edge
+
+	for _, e := range c.edges {
+		if (e.Relation == "re_exports" || e.Relation == "imports") && e.TargetFile != "" && !owned[e.Target] {
+			pending = append(pending, e)
+		}
+	}
+
+	for range 8 {
+		progressed := false
+
+		var still []*model.Edge
+
+		for _, e := range pending {
+			file, sym, ok := decompose(e.Target, e.TargetFile)
+
+			var tgt string
+
+			if ok {
+				if set := chain[[2]string{file, sym}]; len(set) == 1 {
+					for t := range set {
+						tgt = t
+					}
+				}
+			}
+
+			if tgt == "" {
+				still = append(still, e)
+
+				continue
+			}
+
+			e.Target = tgt
+			if e.Relation == "re_exports" {
+				learn([2]string{e.Source, sym}, tgt)
+			}
+
+			progressed = true
+		}
+
+		pending = still
+		if !progressed {
+			break
+		}
+	}
+
+	for _, e := range pending {
+		if file, sym, ok := decompose(e.Target, e.TargetFile); ok {
+			e.Target = file + "_" + sym
+		}
 	}
 }
 
@@ -661,7 +829,7 @@ func (c *corpus) resolveCalls() {
 
 	for _, rc := range c.rawCalls {
 		callee := rc.Callee
-		if callee == "" || base.BuiltinGlobals.Has(callee) || rc.IsMemberCall {
+		if rc.AmbiguousPyImport || callee == "" || base.BuiltinGlobals.Has(callee) || rc.IsMemberCall {
 			continue
 		}
 
@@ -966,6 +1134,12 @@ func (c *corpus) relativize() {
 
 		n.SourceFile = e.sf
 		n.OriginFile = ""
+	}
+
+	for _, n := range c.nodes {
+		if df, ok := n.Extra["definition_file"].(string); ok && filepath.IsAbs(df) {
+			n.Extra["definition_file"] = get(df).sf
+		}
 	}
 
 	for _, ed := range c.edges {

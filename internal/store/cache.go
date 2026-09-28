@@ -13,7 +13,7 @@ import (
 
 // cacheVersion is bumped whenever extractor output changes shape so stale
 // entries are ignored.
-const cacheVersion = "bag-ast-v1"
+const cacheVersion = "bag-ast-v5"
 
 // Cache is a content-addressed per-file AST extraction cache.
 type Cache struct {

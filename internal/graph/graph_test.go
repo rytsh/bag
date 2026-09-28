@@ -129,3 +129,20 @@ func TestDedupeEntities(t *testing.T) {
 		t.Fatalf("edge not rewired: %+v", oe[0])
 	}
 }
+
+func TestBuildMergesAttributesForCollapsedEdgePair(t *testing.T) {
+	nodes := []*model.Node{node("a", "A", "a.py"), node("b", "B", "a.py")}
+	edges := []*model.Edge{
+		{Source: "a", Target: "b", Relation: "calls", Confidence: model.Extracted, SourceFile: "a.py", SourceLocation: "L2", Weight: 1, Context: "call", Extra: map[string]any{"type_only": true}},
+		{Source: "a", Target: "b", Relation: "contains", Confidence: model.Extracted, SourceFile: "a.py", SourceLocation: "L1", Weight: 1},
+	}
+
+	e := graph.Build(nodes, edges, nil, "").Edge("a", "b")
+	if e == nil || e.Relation != "contains" || e.SourceLocation != "L1" {
+		t.Fatalf("unexpected collapsed edge: %+v", e)
+	}
+
+	if e.Context != "call" || e.Extra["type_only"] != true {
+		t.Fatalf("missing retained attributes: %+v", e)
+	}
+}

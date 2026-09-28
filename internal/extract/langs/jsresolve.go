@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -536,39 +537,207 @@ func loadWorkspacePackages(start string) map[string]string {
 	return m
 }
 
+var (
+	jsExportConditionPriority  = []string{"source", "import", "module", "svelte", "require", "default", "types"}
+	jsPlatformExportConditions = map[string][]string{"native": {"react-native"}}
+	jsPlatformSuffixes         = []string{"web", "native", "ios", "android"}
+	jsPlatformPathHints        = []struct {
+		platform string
+		hints    []string
+	}{
+		{"native", []string{"native", "mobile", "ios", "android", "react-native"}},
+		{"web", []string{"web", "browser", "desktop", "electron"}},
+	}
+)
+
+func jsImporterPlatform(startDir string) string {
+	parts := strings.Split(filepath.ToSlash(startDir), "/")
+	for i := len(parts) - 1; i >= 0; i-- {
+		seg := strings.ToLower(parts[i])
+		for _, h := range jsPlatformPathHints {
+			for _, x := range h.hints {
+				if seg == x {
+					return h.platform
+				}
+			}
+		}
+	}
+
+	return ""
+}
+
+func jsPlatformVariants(cand, platform string) []string {
+	var order []string
+
+	for _, p := range jsPlatformSuffixes {
+		if p == platform {
+			order = append(order, p)
+		}
+	}
+
+	for _, p := range jsPlatformSuffixes {
+		if p != platform {
+			order = append(order, p)
+		}
+	}
+
+	ext := filepath.Ext(cand)
+	stem := strings.TrimSuffix(filepath.Base(cand), ext)
+	out := make([]string, 0, len(order))
+
+	for _, p := range order {
+		out = append(out, filepath.Join(filepath.Dir(cand), stem+"."+p+ext))
+	}
+
+	return out
+}
+
+func jsExportTargets(v any, platform string) []string {
+	switch t := v.(type) {
+	case string:
+		return []string{t}
+	case map[string]any:
+		var out []string
+
+		conds := append(append([]string{}, jsPlatformExportConditions[platform]...), jsExportConditionPriority...)
+		for _, c := range conds {
+			switch sub := t[c].(type) {
+			case string, map[string]any:
+				out = append(out, jsExportTargets(sub, platform)...)
+			}
+		}
+
+		return out
+	}
+
+	return nil
+}
+
+func jsContainedIn(p, dir string) bool {
+	rp, rd := jsResolvedPath(p), jsResolvedPath(dir)
+	rel, err := filepath.Rel(rd, rp)
+
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, "../")
+}
+
+func jsExportsCandidates(dir string, targets []string, platform string) []string {
+	var out []string
+
+	for _, t := range targets {
+		c := filepath.Join(dir, t)
+		if !jsContainedIn(c, dir) {
+			continue
+		}
+
+		out = append(out, c)
+		out = append(out, jsPlatformVariants(c, platform)...)
+	}
+
+	return out
+}
+
+// jsPackageEntryCandidates mirrors Graphify's _package_entry_candidates.
+func jsPackageEntryCandidates(dir, sub, platform string) []string {
+	data := readJSONConfig(filepath.Join(dir, "package.json"))
+
+	if sub != "" {
+		if exports, ok := data["exports"].(map[string]any); ok {
+			key := "./" + sub
+			if targets := jsExportTargets(exports[key], platform); len(targets) > 0 {
+				if c := jsExportsCandidates(dir, targets, platform); len(c) > 0 {
+					return c
+				}
+			} else {
+				keys := make([]string, 0, len(exports))
+				for k := range exports {
+					keys = append(keys, k)
+				}
+
+				sort.Strings(keys)
+
+				for _, pattern := range keys {
+					if strings.Count(pattern, "*") != 1 {
+						continue
+					}
+
+					prefix, suffix, _ := strings.Cut(pattern, "*")
+					if !strings.HasPrefix(key, prefix) || (suffix != "" && !strings.HasSuffix(key, suffix)) {
+						continue
+					}
+
+					matched := key[len(prefix) : len(key)-len(suffix)]
+
+					var wild []string
+
+					for _, r := range jsExportTargets(exports[pattern], platform) {
+						if strings.Contains(r, "*") {
+							wild = append(wild, strings.ReplaceAll(r, "*", matched))
+						}
+					}
+
+					if len(wild) > 0 {
+						if c := jsExportsCandidates(dir, wild, platform); len(c) > 0 {
+							return c
+						}
+					}
+				}
+			}
+		}
+
+		return []string{filepath.Join(dir, sub)}
+	}
+
+	switch exports := data["exports"].(type) {
+	case string:
+		return []string{filepath.Join(dir, exports)}
+	case map[string]any:
+		if targets := jsExportTargets(exports["."], platform); len(targets) > 0 {
+			return jsExportsCandidates(dir, targets, platform)
+		}
+	}
+
+	var out []string
+
+	for _, k := range []string{"svelte", "module", "main", "types"} {
+		if s, ok := data[k].(string); ok {
+			out = append(out, filepath.Join(dir, s))
+		}
+	}
+
+	return append(out, filepath.Join(dir, "src", "index"), filepath.Join(dir, "index"))
+}
+
+// resolveWorkspaceImport mirrors Graphify's _resolve_workspace_import.
 func resolveWorkspaceImport(raw, start string) string {
 	pkgs := loadWorkspacePackages(start)
 	if len(pkgs) == 0 {
 		return ""
 	}
 
-	for name, dir := range pkgs {
-		if raw != name && !strings.HasPrefix(raw, name+"/") {
+	platform := jsImporterPlatform(start)
+
+	names := make([]string, 0, len(pkgs))
+	for n := range pkgs {
+		names = append(names, n)
+	}
+
+	sort.Strings(names)
+
+	for _, name := range names {
+		dir := pkgs[name]
+
+		sub := ""
+
+		switch {
+		case raw == name:
+		case strings.HasPrefix(raw, name+"/"):
+			sub = raw[len(name)+1:]
+		default:
 			continue
 		}
 
-		sub := strings.TrimPrefix(strings.TrimPrefix(raw, name), "/")
-		if sub != "" {
-			for _, base := range []string{filepath.Join(dir, "src", sub), filepath.Join(dir, sub)} {
-				if r := resolveJSImportPath(base); isFile(r) {
-					return r
-				}
-			}
-
-			continue
-		}
-
-		data := readJSONConfig(filepath.Join(dir, "package.json"))
-		for _, k := range []string{"source", "types", "module", "main"} {
-			if s, ok := data[k].(string); ok && s != "" {
-				if r := resolveJSImportPath(filepath.Join(dir, s)); isFile(r) {
-					return r
-				}
-			}
-		}
-
-		for _, base := range []string{filepath.Join(dir, "src", "index"), filepath.Join(dir, "index")} {
-			if r := resolveJSImportPath(base); isFile(r) {
+		for _, c := range jsPackageEntryCandidates(dir, sub, platform) {
+			if r := resolveJSImportPath(c); isFile(r) {
 				return r
 			}
 		}

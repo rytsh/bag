@@ -10,21 +10,19 @@ import (
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
 
+	"github.com/rytsh/bag/internal/ids"
 	"github.com/rytsh/bag/internal/model"
 )
 
 // Entity deduplication for non-code nodes (documents, rationale, concepts).
 // Code nodes are identified by id only and never merged by label.
 //
-// Adapted from Graphify's graphify/dedup.py (Apache-2.0). The MinHash/LSH
-// candidate stage is replaced by exact blocking on normalized labels plus a
-// bounded pairwise Jaro-Winkler pass, which yields the same merge decisions
-// for the guard rules below.
+// Adapted from Graphify's graphify/dedup.py (Apache-2.0), including its
+// MinHash/LSH candidate stage (see minhash.go).
 
 const (
 	entropyThreshold = 2.5
 	mergeThreshold   = 92.0
-	maxFuzzyPairs    = 4_000_000
 )
 
 var (
@@ -264,22 +262,25 @@ func DedupeEntities(nodes []*model.Node, edges []*model.Edge) ([]*model.Node, []
 		}
 	}
 
-	if len(candidates) >= 2 && len(candidates)*len(candidates)/2 <= maxFuzzyPairs {
+	if len(candidates) >= 2 {
+		index := newLSH()
+		hashes := make([]*minHash, len(candidates))
 		normCache := make([]string, len(candidates))
+
 		for i, c := range candidates {
 			normCache[i] = normLabel(labelOr(c))
+			hashes[i] = newMinHash(normCache[i])
+			index.insert(i, hashes[i])
 		}
 
-		for i := range candidates {
-			for j := i + 1; j < len(candidates); j++ {
-				a, b := candidates[i], candidates[j]
-				na, nb := normCache[i], normCache[j]
-
-				if uf.find(a.ID) == uf.find(b.ID) {
+		for i, a := range candidates {
+			for _, j := range index.query(hashes[i]) {
+				b := candidates[j]
+				if j == i || uf.find(a.ID) == uf.find(b.ID) {
 					continue
 				}
 
-				if shouldFuzzyMerge(a, b, na, nb) {
+				if shouldFuzzyMerge(a, b, normCache[i], normCache[j]) {
 					w := pickWinner([]*model.Node{a, b})
 					uf.union(w.ID, a.ID)
 					uf.union(w.ID, b.ID)
@@ -363,8 +364,49 @@ func labelOr(n *model.Node) string {
 	return n.ID
 }
 
+// fileStructureNodeKinds mark nodes that are structure of their file (the
+// file's own page, a heading) rather than an entity mentioned inside it.
+var fileStructureNodeKinds = map[string]bool{"page": true, "heading": true}
+
+// readsAsFileEntity reports whether n is an entity found inside its file
+// rather than the file itself or a stamped structural part of it.
+//
+// Adapted from Graphify's dedup._reads_as_file_entity (Apache-2.0).
 func readsAsFileEntity(n *model.Node) bool {
-	return IsFileNodeLabel(n.Label, n.SourceFile)
+	if n.ID == "" || n.SourceFile == "" {
+		return false
+	}
+
+	if k, _ := n.Extra["node_kind"].(string); fileStructureNodeKinds[k] {
+		return false
+	}
+
+	return !idPrefixes(n.SourceFile)[n.ID]
+}
+
+var extSuffix = regexp.MustCompile(`\.[^./]+$`)
+
+// idPrefixes returns every id prefix a node extracted from sourceFile may
+// mint: each trailing slice of the extension-stripped, slugified path.
+//
+// Adapted from Graphify's dedup._id_prefixes (Apache-2.0).
+func idPrefixes(sourceFile string) map[string]bool {
+	stem := extSuffix.ReplaceAllString(strings.ReplaceAll(sourceFile, `\`, "/"), "")
+
+	var segs []string
+
+	for _, p := range strings.Split(stem, "/") {
+		if s := ids.NormalizeID(p); s != "" {
+			segs = append(segs, s)
+		}
+	}
+
+	out := make(map[string]bool, len(segs))
+	for i := range segs {
+		out[strings.Join(segs[i:], "_")] = true
+	}
+
+	return out
 }
 
 func shouldFuzzyMerge(a, b *model.Node, na, nb string) bool {
@@ -569,7 +611,8 @@ func jaro(s1, s2 string) float64 {
 
 	m := float64(matches)
 
-	return (m/float64(len(a)) + m/float64(len(b)) + (m-float64(t)/2)/m) / 3
+	// rapidfuzz counts half-transpositions with integer division.
+	return (m/float64(len(a)) + m/float64(len(b)) + (m-float64(t/2))/m) / 3
 }
 
 func jaroWinkler(s1, s2 string) float64 {

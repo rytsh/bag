@@ -193,7 +193,7 @@ func ExtractJulia(path, _ string, src []byte) *model.Extraction {
 
 			b.AddNode(fid, label, line)
 			b.AddEdge(scope, fid, "defines", line)
-			bodies = append(bodies, rustBody{fid, n})
+			bodies = append(bodies, rustBody{id: fid, node: n})
 
 			return
 		case "macrocall_expression":
@@ -279,7 +279,7 @@ func ExtractJulia(path, _ string, src []byte) *model.Extraction {
 			b.AddEdge(scope, fid, "defines", line)
 
 			if len(ch) >= 3 {
-				bodies = append(bodies, rustBody{fid, ch[len(ch)-1]})
+				bodies = append(bodies, rustBody{id: fid, node: ch[len(ch)-1]})
 			}
 
 			return

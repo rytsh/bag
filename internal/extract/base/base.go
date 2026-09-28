@@ -74,6 +74,9 @@ type Builder struct {
 	Edges    []*model.Edge
 	RawCalls []*model.RawCall
 
+	// OnAdd, when set, is called for every sourced node as it is added.
+	OnAdd func(n *model.Node)
+
 	seen map[string]*model.Node
 }
 
@@ -116,6 +119,10 @@ func (b *Builder) AddNode(id, label string, line int) *model.Node {
 	b.seen[id] = n
 	b.Nodes = append(b.Nodes, n)
 
+	if b.OnAdd != nil {
+		b.OnAdd(n)
+	}
+
 	return n
 }
 
@@ -126,10 +133,11 @@ func (b *Builder) AddStub(id, label string) *model.Node {
 	}
 
 	n := &model.Node{
-		ID:         id,
-		Label:      label,
-		FileType:   model.FileTypeCode,
-		OriginFile: b.Path,
+		ID:            id,
+		Label:         label,
+		FileType:      model.FileTypeCode,
+		OriginFile:    b.Path,
+		EmptyLocation: true,
 	}
 	b.seen[id] = n
 	b.Nodes = append(b.Nodes, n)
@@ -189,7 +197,9 @@ func (b *Builder) Result() *model.Extraction {
 			continue
 		}
 
-		if b.Has(e.Target) || e.Relation == "imports" || e.Relation == "imports_from" || e.Relation == "re_exports" {
+		if b.Has(e.Target) || e.Relation == "imports" || e.Relation == "imports_from" || e.Relation == "re_exports" ||
+			e.Relation == "dynamic_import" ||
+			(e.PyImport != nil && e.PyImport.MarkerOnly) {
 			clean = append(clean, e)
 		}
 	}

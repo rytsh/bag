@@ -532,6 +532,8 @@ var kotlinConfig = &generic.Config{
 	FunctionHook:      ktFunctionHook,
 	ExtraWalk:         ktExtraWalk,
 	CallName:          ktCallName,
+	DecorateRawCall:   ktDecorateRawCall,
+	PostProcess:       ktPostProcess,
 }
 
 // ExtractKotlin extracts a Kotlin file.

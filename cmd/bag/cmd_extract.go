@@ -43,8 +43,10 @@ func runExtract(ctx context.Context, args []string) error {
 	noCluster := fs.Bool("no-cluster", false, "skip community detection")
 	noViz := fs.Bool("no-viz", false, "skip graph.html")
 	noReport := fs.Bool("no-report", false, "skip GRAPH_REPORT.md")
-	semanticOn := fs.Bool("semantic", false, "run the LLM pass over docs/papers/images (needs BAG_LLM_MODEL)")
+	semanticOn := fs.Bool("semantic", false, "run the LLM pass over docs/papers/images and transcribed video/audio (needs BAG_LLM_MODEL)")
 	model := fs.String("model", cfg.LLM.Model, "LLM model for --semantic")
+	noTranscribe := fs.Bool("no-transcribe", false, "skip video/audio transcription in --semantic")
+	whisperModel := fs.String("whisper-model", cfg.Transcribe.Model, "transcription model for video/audio")
 
 	var excludes stringList
 	fs.Var(&excludes, "exclude", "extra gitignore-style exclude pattern (repeatable)")
@@ -112,6 +114,30 @@ func runExtract(ctx context.Context, args []string) error {
 			tokens = t
 
 			return ex, err
+		}
+
+		if !*noTranscribe {
+			tc := cfg.Transcribe
+			if tc.BaseURL == "" {
+				tc.BaseURL = cfg.LLM.BaseURL
+			}
+
+			if tc.APIKey == "" {
+				tc.APIKey = cfg.LLM.APIKey
+			}
+
+			ttimeout, _ := time.ParseDuration(tc.Timeout)
+
+			tr, err := semantic.NewTranscriber(semantic.TranscribeConfig{
+				BaseURL: tc.BaseURL, APIKey: tc.APIKey, Model: *whisperModel, Language: tc.Language,
+				MaxUpload: int64(tc.MaxUploadMB) << 20, FFmpeg: tc.FFmpeg, Timeout: ttimeout,
+				OutDir: filepath.Join(outDir, "transcripts"),
+			})
+			if err != nil {
+				return err
+			}
+
+			opt.Transcribe = tr.TranscribeAll
 		}
 	}
 

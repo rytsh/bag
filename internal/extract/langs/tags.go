@@ -19,12 +19,26 @@ import (
 // ships a tree-sitter tags query (definitions + references). Dedicated
 // extractors always take precedence.
 
+// lockedTagger serializes use of one Tagger: gotreesitter's parser keeps
+// mutable per-language state, so concurrent Tag calls race.
+type lockedTagger struct {
+	mu sync.Mutex
+	t  *ts.Tagger
+}
+
+func (l *lockedTagger) Tag(src []byte) []ts.Tag {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return l.t.Tag(src)
+}
+
 var (
 	taggerMu sync.Mutex
-	taggers  = map[string]*ts.Tagger{}
+	taggers  = map[string]*lockedTagger{}
 )
 
-func taggerFor(entry *grammars.LangEntry) *ts.Tagger {
+func taggerFor(entry *grammars.LangEntry) *lockedTagger {
 	taggerMu.Lock()
 	defer taggerMu.Unlock()
 
@@ -53,9 +67,10 @@ func taggerFor(entry *grammars.LangEntry) *ts.Tagger {
 		return nil
 	}
 
-	taggers[entry.Name] = t
+	lt := &lockedTagger{t: t}
+	taggers[entry.Name] = lt
 
-	return t
+	return lt
 }
 
 var classKinds = base.NewSet("class", "interface", "struct", "module", "trait", "enum", "type", "object",

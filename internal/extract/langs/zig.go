@@ -86,7 +86,7 @@ func ExtractZig(path, _ string, src []byte) *model.Extraction {
 			}
 
 			if bd := n.Field("body"); bd != nil {
-				bodies = append(bodies, rustBody{fid, bd})
+				bodies = append(bodies, rustBody{id: fid, node: bd})
 			}
 
 			return

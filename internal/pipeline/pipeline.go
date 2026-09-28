@@ -21,6 +21,7 @@ import (
 	"github.com/rytsh/bag/internal/graph"
 	"github.com/rytsh/bag/internal/model"
 	"github.com/rytsh/bag/internal/report"
+	"github.com/rytsh/bag/internal/semantic"
 )
 
 // Options configure a build.
@@ -39,6 +40,10 @@ type Options struct {
 	NoReport           bool
 	// Semantic, when set, extracts non-code files (docs/papers/images).
 	Semantic func(ctx context.Context, det *detect.Result) (*model.Extraction, error)
+	// Transcribe, when set together with Semantic, turns video/audio files
+	// into transcripts that the semantic pass reads as documents. prompt is
+	// the Whisper domain hint built from the AST god nodes.
+	Transcribe func(ctx context.Context, files []string, prompt string) []string
 	// Tokens receives the semantic token usage (input, output).
 	Tokens *[2]int
 }
@@ -113,7 +118,8 @@ func Run(ctx context.Context, opt Options) (*Output, error) {
 	}
 
 	slog.Info("detected corpus", "code", len(code), "docs", len(det.Files[detect.Document]),
-		"papers", len(det.Files[detect.Paper]), "images", len(det.Files[detect.Image]))
+		"papers", len(det.Files[detect.Paper]), "images", len(det.Files[detect.Image]),
+		"video", len(det.Files[detect.Video]))
 
 	ex, err := extract.Run(ctx, code, extract.Options{Root: root, Workers: opt.Workers, Cache: opt.Cache})
 	if err != nil {
@@ -131,6 +137,17 @@ func Run(ctx context.Context, opt Options) (*Output, error) {
 	o := &Output{Detect: det, Extract: ex, Root: root, OutDir: out}
 
 	if opt.Semantic != nil {
+		if opt.Transcribe != nil && len(det.Files[detect.Video]) > 0 {
+			var labels []string
+			for _, g := range analyze.GodNodes(graph.Build(nodes, edges, nil, root), 10, 0) {
+				labels = append(labels, g.Label)
+			}
+
+			ts := opt.Transcribe(ctx, det.Files[detect.Video], semantic.BuildWhisperPrompt(labels))
+			slog.Info("transcribed media, treating as docs", "count", len(ts))
+			det.Files[detect.Document] = append(det.Files[detect.Document], ts...)
+		}
+
 		sem, err := opt.Semantic(ctx, det)
 		if err != nil {
 			slog.Warn("semantic extraction failed", "error", err)

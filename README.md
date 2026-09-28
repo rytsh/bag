@@ -9,9 +9,9 @@ two tools.
 - **Single static binary.** No Python, no CGo, no C toolchain. Tree-sitter runs
   through [gotreesitter](https://github.com/odvcencio/gotreesitter).
 - **Local and deterministic for code.** Code is parsed from the AST; no LLM and
-  nothing leaves your machine. The optional semantic pass for docs, PDFs and
-  images talks to any OpenAI-compatible endpoint (OpenAI, Ollama, vLLM,
-  LM Studio, …).
+  nothing leaves your machine. The optional semantic pass for docs, PDFs,
+  images and transcribed video/audio talks to any OpenAI-compatible endpoint
+  (OpenAI, Ollama, vLLM, LM Studio, …).
 - **Every edge is explained.** Each edge is tagged `EXTRACTED` (stated in the
   source), `INFERRED` (resolved by bag) or `AMBIGUOUS`.
 - **Many languages.** Dedicated extractors (ported from Graphify, output checked
@@ -53,7 +53,7 @@ graphify-out/
 
 | Command | What it does |
 | --- | --- |
-| `extract [dir]` | Detect → extract → resolve → cluster → report. `--semantic` adds the LLM pass for docs/papers/images |
+| `extract [dir]` | Detect → extract → resolve → cluster → report. `--semantic` adds the LLM pass for docs/papers/images and video/audio transcripts |
 | `update [dir]` | Rebuild using the AST cache (only changed files are re-parsed) |
 | `watch [dir]` | Rebuild on file changes (debounced) |
 | `hook install\|uninstall\|status` | Git hooks (post-commit/checkout/merge) that keep the graph fresh |
@@ -96,11 +96,24 @@ Config is loaded with [chu](https://github.com/rakunlabs/chu) from
 | `BAG_LLM_MODEL` | | model name for `--semantic` |
 | `BAG_LLM_TOKEN_BUDGET` | `60000` | per-chunk input budget |
 | `BAG_LLM_CONCURRENCY` | `4` | parallel LLM requests |
+| `BAG_TRANSCRIBE_BASE_URL` / `BAG_TRANSCRIBE_API_KEY` | LLM values | OpenAI-compatible `/audio/transcriptions` endpoint (OpenAI, Groq, LocalAI, speaches…) |
+| `BAG_TRANSCRIBE_MODEL` | `whisper-1` | transcription model (`--whisper-model`) |
+| `BAG_TRANSCRIBE_LANGUAGE` | | optional ISO-639-1 hint |
+| `BAG_TRANSCRIBE_MAX_UPLOAD_MB` | `25` | per-request limit; larger files are split with ffmpeg |
+| `BAG_TRANSCRIBE_FFMPEG` | `ffmpeg` on PATH | ffmpeg binary (`-` disables it) |
 | `BAG_SERVER_HOST` / `BAG_SERVER_PORT` / `BAG_SERVER_API_KEY` | `127.0.0.1` / `8080` / | `bag serve --transport http` |
 
 Files are filtered with `.gitignore`, `.graphifyignore` and `.bagignore`
 (gitignore syntax, `!` negation supported). Secret-looking files (`.env`,
 keys, credentials) are always skipped.
+
+With `--semantic`, video and audio files (`.mp4 .mov .webm .mkv .avi .m4v
+.mp3 .wav .m4a .ogg`) are transcribed to `graphify-out/transcripts/<stem>.txt`
+and then read as documents, like Graphify's Whisper step. The prompt is built
+from the AST god nodes (`GRAPHIFY_WHISPER_PROMPT` overrides it). Files the API
+accepts are uploaded as-is; other containers and oversized files need
+`ffmpeg`, which is run as an external process (bag itself stays pure Go).
+Existing transcripts are reused; `--no-transcribe` skips the step.
 
 ## Graphify compatibility
 
@@ -111,17 +124,29 @@ keys, credentials) are always skipped.
 - **graph.json.** `node_link_data` with `links`, canonical key order, stable
   sort, `community`, `norm_label`, `_origin`, `confidence_score`.
 - **Resolution passes.** File-id canonicalization, collision salting,
-  unique-stub rewiring, cross-file call resolution with import evidence,
-  language family guards, Go/Java/PHP/Python type and import resolution.
+  header/impl class merging (C/C++/ObjC), unique-stub rewiring, cross-file
+  call resolution with import evidence, language family guards, Go/Java/PHP/
+  Python/C# type and import resolution, JS/TS symbol-level imports through
+  re-export barrels, receiver-typed member calls (TS/JS, C#, Swift, Ruby),
+  Python class/module-qualified calls, submodule imports, `__init__.py`
+  re-exports and the ambiguous-module guard, JS/TS and Python
+  `indirect_call` (callbacks, dispatch tables), dynamic `import()`,
+  receiver-typed member calls for C++, Objective-C, Java and Rust `self`,
+  Ruby inherited implicit-self promotion, `unresolved_calls` parking for
+  cross-repo merges, Kotlin/Elixir import targets and qualified calls, C#
+  interface dispatch (`dispatches_to`), config JSON (`package.json`,
+  `tsconfig.json`, ...) and MCP server configs.
+- **Deduplication.** Graphify's MinHash/LSH candidate stage is reproduced
+  bit-for-bit, so rationale/document/concept merges match.
 
 `testdata/graphify_golden.json` holds Graphify's output for
-`testdata/fixtures`; `go test ./internal/extract` fails if bag drifts from it.
-For any other directory, run `make parity DIR=path`.
+`testdata/fixtures`, and `testdata/graphify_resolve_golden.json` for the
+multi-file `testdata/resolve` corpus; `go test ./internal/extract` fails if bag
+drifts from either. For any other directory, run `make parity DIR=path`.
 
-Known gaps: C# interface dispatch edges (`dispatches_to`), Graphify's
-per-language member-call resolvers (receiver typing), Groovy parity
-(gotreesitter's Groovy grammar has a different tree shape) and video/audio
-transcription.
+Known gaps are tracked in [ISSUES.md](ISSUES.md): very large minified JS
+bundles (a gotreesitter parser bug), a few Groovy constructs the reference
+grammar misparses, and an empty `source_location` on stub nodes.
 
 ## Layout
 

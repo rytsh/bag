@@ -57,7 +57,7 @@ func NodeMap(n *model.Node) map[string]any {
 		m["file_type"] = n.FileType
 	}
 
-	if n.SourceLocation != "" {
+	if n.SourceLocation != "" || (n.EmptyLocation && n.SourceFile == "") {
 		m["source_location"] = n.SourceLocation
 	}
 
@@ -66,11 +66,24 @@ func NodeMap(n *model.Node) map[string]any {
 	}
 
 	if len(n.Metadata) > 0 {
-		m["metadata"] = n.Metadata
+		m["metadata"] = orderedMeta(n.Metadata, n.MetaOrder)
 	}
 
 	if n.Callable {
 		m["_callable"] = true
+	}
+
+	// Extraction markers Graphify leaves on its nodes.
+	if n.TopModule {
+		m["_elixir_module"] = true
+	}
+
+	if n.RustDeclCount > 0 {
+		m["_rust_declaration_count"] = n.RustDeclCount
+	}
+
+	if n.RustImplKey != "" {
+		m["_rust_impl_key"] = n.RustImplKey
 	}
 
 	if n.CallableClass {
@@ -92,7 +105,10 @@ func EdgeMap(e *model.Edge) map[string]any {
 	m["relation"] = e.Relation
 	m["confidence"] = e.Confidence
 	m["source_file"] = e.SourceFile
-	m["weight"] = e.Weight
+
+	if !e.NoWeight {
+		m["weight"] = e.Weight
+	}
 
 	if e.SourceLocation != "" {
 		m["source_location"] = e.SourceLocation
@@ -103,7 +119,7 @@ func EdgeMap(e *model.Edge) map[string]any {
 	}
 
 	if len(e.Metadata) > 0 {
-		m["metadata"] = e.Metadata
+		m["metadata"] = orderedMeta(e.Metadata, e.MetaOrder)
 	}
 
 	if e.ConfidenceScore != nil {
@@ -128,7 +144,9 @@ func (g *Graph) MarshalGraphJSON(opt WriteOptions) ([]byte, error) {
 
 	for _, n := range g.Nodes() {
 		m := NodeMap(n)
-		m["_origin"] = originOf(n.Extra)
+		if n.Extra["external"] != true {
+			m["_origin"] = originOf(n.Extra)
+		}
 
 		if cid, ok := nc[n.ID]; ok {
 			m["community"] = cid
@@ -276,6 +294,24 @@ type kv struct {
 }
 
 type orderedMap []kv
+
+// orderedMeta renders metadata with the keys in order first, the rest
+// sorted.
+func orderedMeta(md map[string]any, order []string) any {
+	if len(order) == 0 {
+		return md
+	}
+
+	var lead []string
+
+	for _, k := range order {
+		if _, ok := md[k]; ok {
+			lead = append(lead, k)
+		}
+	}
+
+	return canonical(md, lead...)
+}
 
 func canonical(m map[string]any, lead ...string) orderedMap {
 	out := orderedMap{}
@@ -435,6 +471,15 @@ func writeValue(b *bytes.Buffer, v any, indent int, ascii bool) {
 		b.WriteByte('}')
 	case map[string]any:
 		writeValue(b, canonical(t), indent, ascii)
+	case model.OrderedFields:
+		om := make(orderedMap, 0, len(t))
+		for _, f := range t {
+			if k, ok := f[0].(string); ok {
+				om = append(om, kv{k, f[1]})
+			}
+		}
+
+		writeValue(b, om, indent, ascii)
 	case []orderedMap:
 		if len(t) == 0 {
 			b.WriteString("[]")

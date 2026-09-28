@@ -8,6 +8,7 @@ import (
 	"github.com/rytsh/bag/internal/extract"
 	"github.com/rytsh/bag/internal/extract/base"
 	"github.com/rytsh/bag/internal/extract/tsx"
+	"github.com/rytsh/bag/internal/ids"
 	"github.com/rytsh/bag/internal/model"
 )
 
@@ -16,7 +17,7 @@ import (
 // sourceless type stubs to the imported definition.
 //
 // Adapted from Graphify's _resolve_cross_file_imports (Apache-2.0).
-func resolvePythonCrossFileImports(_ string, nodesP *[]*model.Node, edgesP *[]*model.Edge, per []extract.FileResult) {
+func resolvePythonCrossFileImports(root string, nodesP *[]*model.Node, edgesP *[]*model.Edge, per []extract.FileResult) {
 	nodes, edges := *nodesP, *edgesP
 
 	var py []extract.FileResult
@@ -30,6 +31,8 @@ func resolvePythonCrossFileImports(_ string, nodesP *[]*model.Node, edgesP *[]*m
 	if len(py) == 0 {
 		return
 	}
+
+	_, ambiguous := pyAmbiguousModules(root, per)
 
 	stemEntities := map[string]map[string]string{}
 	bareToQualified := map[string]string{}
@@ -112,7 +115,7 @@ func resolvePythonCrossFileImports(_ string, nodesP *[]*model.Node, edgesP *[]*m
 		refSeen := map[string]map[string]bool{}
 
 		resolveImport := func(n *tsx.Node) {
-			targetFQ := ""
+			targetFQ, absModule := "", ""
 
 			for _, c := range n.Children() {
 				if c.Type() == "relative_import" {
@@ -149,6 +152,12 @@ func resolvePythonCrossFileImports(_ string, nodesP *[]*model.Node, edgesP *[]*m
 
 				if c.Type() == "dotted_name" && targetFQ == "" {
 					dotted := c.Text()
+					absModule = dotted
+
+					if ambiguous[ids.MakeID(dotted)] {
+						return
+					}
+
 					asPath := strings.ReplaceAll(dotted, ".", "/")
 
 					if _, ok := stemEntities[asPath]; ok {
@@ -203,7 +212,7 @@ func resolvePythonCrossFileImports(_ string, nodesP *[]*model.Node, edgesP *[]*m
 					}
 				}
 
-				if imported == "" {
+				if imported == "" || (absModule != "" && ambiguous[ids.MakeID(absModule+"."+imported)]) {
 					continue
 				}
 

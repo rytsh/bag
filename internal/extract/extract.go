@@ -213,3 +213,9 @@ func sortedKeys[V any](m map[string]V) []string {
 }
 
 var _ = base.MakeID
+
+func isRegularFile(p string) bool {
+	st, err := os.Stat(p)
+
+	return err == nil && st.Mode().IsRegular()
+}

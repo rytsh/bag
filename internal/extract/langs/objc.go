@@ -63,6 +63,45 @@ func ExtractObjC(path, _ string, src []byte) *model.Extraction {
 
 	var bodies []objcBody
 
+	fieldTypes := map[string]map[string]string{}
+	conflicted := map[[2]string]bool{}
+	recordField := func(cls, field, typ string) {
+		if conflicted[[2]string{cls, field}] {
+			return
+		}
+
+		t := fieldTypes[cls]
+		if t == nil {
+			t = map[string]string{}
+			fieldTypes[cls] = t
+		}
+
+		if prev, ok := t[field]; ok && prev != typ {
+			delete(t, field)
+			conflicted[[2]string{cls, field}] = true
+
+			return
+		}
+
+		t[field] = typ
+	}
+
+	collectIvars := func(ivars *tsx.Node, cls string) {
+		for _, iv := range ivars.Children() {
+			if iv.Type() != "instance_variable" {
+				continue
+			}
+
+			for _, sd := range iv.Children() {
+				if sd.Type() == "struct_declaration" {
+					if f, t, ok := objcFieldDeclEntry(sd); ok {
+						recordField(cls, f, t)
+					}
+				}
+			}
+		}
+	}
+
 	var typeIdents func(n *tsx.Node, out *[]*tsx.Node)
 	typeIdents = func(n *tsx.Node, out *[]*tsx.Node) {
 		if n.Type() == "type_identifier" {
@@ -191,7 +230,13 @@ func ExtractObjC(path, _ string, src []byte) *model.Extraction {
 								b.AddEdgeCtx(cls, ensure(ti.Text()), "references", pl, "field")
 							}
 						}
+
+						if f, t, ok := objcFieldDeclEntry(s); ok {
+							recordField(cls, f, t)
+						}
 					}
+				case c.Type() == "instance_variables":
+					collectIvars(c, cls)
 				case c.Type() == "method_declaration":
 					walk(c, cls)
 				}
@@ -224,7 +269,10 @@ func ExtractObjC(path, _ string, src []byte) *model.Extraction {
 			}
 
 			for _, c := range n.Children() {
-				if c.Type() == "implementation_definition" {
+				switch c.Type() {
+				case "instance_variables":
+					collectIvars(c, impl)
+				case "implementation_definition":
 					for _, s := range c.Children() {
 						walk(s, impl)
 					}
@@ -369,6 +417,17 @@ func ExtractObjC(path, _ string, src []byte) *model.Extraction {
 							CallerID: caller, Callee: name, IsMemberCall: true, Receiver: recv.Text(),
 							Language: "objc", SourceFile: path, SourceLocation: base.Loc(n.Line()),
 						})
+					} else if recv != nil && recv.Type() == "field_expression" {
+						// Only the exact `self.<field>` shape; the bare field name
+						// is typed through the class's property/ivar table.
+						if k := recv.Children(); len(k) == 3 && k[0].Type() == "identifier" && k[0].Text() == "self" &&
+							k[1].Type() == "." && k[2].Type() == "field_identifier" {
+							b.RawCalls = append(b.RawCalls, &model.RawCall{
+								CallerID: caller, Callee: name, IsMemberCall: true, Receiver: k[2].Text(),
+								ReceiverType: objcSelfField, Language: "objc", SourceFile: path,
+								SourceLocation: base.Loc(n.Line()),
+							})
+						}
 					}
 				}
 			case "field_expression":
@@ -428,5 +487,124 @@ func ExtractObjC(path, _ string, src []byte) *model.Extraction {
 		wc(bd.node)
 	}
 
-	return b.ResultUnfiltered()
+	res := b.ResultUnfiltered()
+
+	table := map[string]string{}
+	for _, bd := range bodies {
+		objcLocalVarTypes(bd.node, table)
+	}
+
+	if len(table) > 0 {
+		res.TypeTable = table
+	}
+
+	for cls, tbl := range fieldTypes {
+		n := b.Get(cls)
+		if n == nil || len(tbl) == 0 {
+			continue
+		}
+
+		if res.FieldTables == nil {
+			res.FieldTables = map[string]map[string]string{}
+		}
+
+		m := res.FieldTables[n.Label]
+		if m == nil {
+			m = map[string]string{}
+			res.FieldTables[n.Label] = m
+		}
+
+		for f, t := range tbl {
+			m[f] = t
+		}
+	}
+
+	return res
+}
+
+// objcSelfField marks a raw call whose receiver is `self.<field>`.
+const objcSelfField = "\x00self_field"
+
+// objcFieldDeclEntry returns (field, Type) of a property/ivar declaration
+// with one bare capitalized type and one simple declarator.
+//
+// Adapted from Graphify's extract_objc._field_decl_entry (Apache-2.0).
+func objcFieldDeclEntry(sd *tsx.Node) (string, string, bool) {
+	var types, decls []*tsx.Node
+
+	for _, c := range sd.Children() {
+		switch c.Type() {
+		case "type_identifier":
+			types = append(types, c)
+		case "struct_declarator":
+			decls = append(decls, c)
+		}
+	}
+
+	if len(types) != 1 || len(decls) != 1 {
+		return "", "", false
+	}
+
+	typ := strings.TrimSpace(types[0].Text())
+	if typ == "" || !upperStart(typ) {
+		return "", "", false
+	}
+
+	inner := decls[0].Children()
+	if len(inner) != 1 {
+		return "", "", false
+	}
+
+	f := cppDeclaratorName(inner[0])
+	if f == "" {
+		return "", "", false
+	}
+
+	return f, typ, true
+}
+
+// objcLocalVarTypes collects `var -> ClassName` from `Foo *f = ...;` locals.
+//
+// Adapted from Graphify's _objc_local_var_types (Apache-2.0).
+func objcLocalVarTypes(body *tsx.Node, table map[string]string) {
+	stack := []*tsx.Node{body}
+
+	for len(stack) > 0 {
+		n := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+
+		if n.Type() == "method_definition" && n != body {
+			continue
+		}
+
+		if n.Type() == "declaration" {
+			tn := n.Field("type")
+			if tn == nil {
+				tn = n.ChildOfType("type_identifier")
+			}
+
+			if tn != nil && tn.Type() == "type_identifier" {
+				typ := strings.TrimSpace(tn.Text())
+
+				var decls []*tsx.Node
+
+				for _, c := range n.Children() {
+					switch c.Type() {
+					case "identifier", "pointer_declarator", "init_declarator":
+						decls = append(decls, c)
+					}
+				}
+
+				if typ != "" && upperStart(typ) && len(decls) == 1 {
+					if v := cppDeclaratorName(decls[0]); v != "" {
+						if _, ok := table[v]; !ok {
+							table[v] = typ
+						}
+					}
+				}
+			}
+		}
+
+		stack = append(stack, n.Children()...)
+	}
 }

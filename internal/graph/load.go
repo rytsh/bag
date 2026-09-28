@@ -70,6 +70,10 @@ func Parse(raw []byte) (*Loaded, error) {
 			CallableClass:  m["_callable_class"] == true,
 		}
 
+		if loc, ok := m["source_location"].(string); ok && loc == "" {
+			n.EmptyLocation = true
+		}
+
 		if md, ok := m["metadata"].(map[string]any); ok {
 			n.Metadata = md
 		}
@@ -114,6 +118,8 @@ func Parse(raw []byte) (*Loaded, error) {
 
 		if w, ok := m["weight"].(float64); ok {
 			e.Weight = w
+		} else if _, has := m["weight"]; !has {
+			e.NoWeight = true
 		}
 
 		if s, ok := m["confidence_score"].(float64); ok {

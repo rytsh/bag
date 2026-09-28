@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/rytsh/bag/internal/detect"
@@ -24,9 +25,27 @@ type golden struct {
 // and edge (source, target, relation, confidence) tuples with the graph
 // Graphify produced for the same files (testdata/graphify_golden.json).
 func TestGraphifyParity(t *testing.T) {
-	root, _ := filepath.Abs("../../testdata/fixtures")
+	// Known, documented divergence: Groovy uses gotreesitter's grammar shape,
+	// which differs from tree-sitter-groovy.
+	checkParity(t, "../../testdata/fixtures", "../../testdata/graphify_golden.json", func(k string) bool {
+		return strings.Contains(k, "groovy")
+	}, false)
+}
 
-	raw, err := os.ReadFile("../../testdata/graphify_golden.json")
+// TestGraphifyResolveParity covers the cross-file resolution passes
+// (header/impl merge, JS/TS symbol facts, receiver-typed member calls for
+// TS/C#/Swift/Ruby, Kotlin/Elixir import targets, C# interface dispatch) on a
+// multi-file corpus; both directions must match exactly.
+func TestGraphifyResolveParity(t *testing.T) {
+	checkParity(t, "../../testdata/resolve", "../../testdata/graphify_resolve_golden.json", nil, true)
+}
+
+func checkParity(t *testing.T, dir, goldenPath string, skip func(string) bool, exact bool) {
+	t.Helper()
+
+	root, _ := filepath.Abs(dir)
+
+	raw, err := os.ReadFile(goldenPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,9 +60,7 @@ func TestGraphifyParity(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	files := det.Files[detect.Code]
-
-	res, err := extract.Run(context.Background(), files, extract.Options{Root: root, Workers: 1})
+	res, err := extract.Run(context.Background(), det.Files[detect.Code], extract.Options{Root: root, Workers: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,43 +77,59 @@ func TestGraphifyParity(t *testing.T) {
 		gotEdges[fmt.Sprint([]string{e.Source, e.Target, e.Relation, e.Confidence})] = true
 	}
 
-	// Known, documented divergences: Graphify's C# interface-dispatch pass
-	// (dispatches_to) is not ported yet; Groovy uses gotreesitter's grammar
-	// shape, which differs from tree-sitter-groovy.
-	skip := func(k string) bool {
-		return contains(k, "dispatches_to") || contains(k, "sample.groovy") || contains(k, "groovy")
+	if skip == nil {
+		skip = func(string) bool { return false }
 	}
 
-	var missingN, missingE []string
-
-	for _, n := range want.Nodes {
-		k := fmt.Sprint(n)
-		if !gotNodes[k] && !skip(k) {
-			missingN = append(missingN, k)
-		}
-	}
-
-	for _, e := range want.Edges {
-		k := fmt.Sprint(e)
-		if !gotEdges[k] && !skip(k) {
-			missingE = append(missingE, k)
-		}
-	}
-
-	sort.Strings(missingN)
-	sort.Strings(missingE)
+	missingN := missing(want.Nodes, gotNodes, skip)
+	missingE := missing(want.Edges, gotEdges, skip)
 
 	if len(missingN) > 0 || len(missingE) > 0 {
 		t.Errorf("missing %d nodes / %d edges vs Graphify:\n%v\n%v", len(missingN), len(missingE), missingN, missingE)
 	}
+
+	if !exact {
+		return
+	}
+
+	extraN := extra(want.Nodes, gotNodes)
+	extraE := extra(want.Edges, gotEdges)
+
+	if len(extraN) > 0 || len(extraE) > 0 {
+		t.Errorf("extra %d nodes / %d edges vs Graphify:\n%v\n%v", len(extraN), len(extraE), extraN, extraE)
+	}
 }
 
-func contains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
+func missing(want [][]string, got map[string]bool, skip func(string) bool) []string {
+	var out []string
+
+	for _, w := range want {
+		k := fmt.Sprint(w)
+		if !got[k] && !skip(k) {
+			out = append(out, k)
 		}
 	}
 
-	return false
+	sort.Strings(out)
+
+	return out
+}
+
+func extra(want [][]string, got map[string]bool) []string {
+	w := map[string]bool{}
+	for _, x := range want {
+		w[fmt.Sprint(x)] = true
+	}
+
+	var out []string
+
+	for k := range got {
+		if !w[k] {
+			out = append(out, k)
+		}
+	}
+
+	sort.Strings(out)
+
+	return out
 }

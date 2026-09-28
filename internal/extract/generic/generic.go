@@ -72,6 +72,25 @@ type Config struct {
 	PreScan func(x *Ctx)
 	// PostProcess runs after call extraction on the final result.
 	PostProcess func(x *Ctx, res *model.Extraction)
+	// DecorateRawCall may stamp language-specific fields on an unresolved
+	// call (receiver type, qualified prefix) using the call node.
+	DecorateRawCall func(x *Ctx, n *tsx.Node, rc *model.RawCall)
+	// DeferStubTarget reports whether a call whose bare name only matches a
+	// sourceless in-file stub should still go to cross-file resolution.
+	DeferStubTarget func(n *tsx.Node) bool
+	// DescendClosures lists boundary node types whose bodies, when not
+	// separately tracked, are walked with the enclosing caller (JS closures).
+	DescendClosures base.Set
+	// ClassMeta runs after a class node is added; reopened reports that the
+	// id was already emitted in this file (Ruby).
+	ClassMeta func(x *Ctx, n *tsx.Node, classID string, reopened bool)
+	// ScopeLocals returns names a node binds for its own subtree only
+	// (closure params, block-scoped let/const, catch and loop bindings); they
+	// shadow indirect references inside it.
+	ScopeLocals func(n *tsx.Node) map[string]bool
+	// QualifyClassName rewrites a class name before its id/label are built and
+	// returns the scope segments to push while walking its body (Ruby).
+	QualifyClassName func(x *Ctx, name string) (qualified string, push []string)
 }
 
 // Ctx is the per-file extraction state exposed to hooks.
@@ -103,6 +122,15 @@ type Ctx struct {
 
 	NamespaceStack []string
 	ScopeStack     []string
+	// ClassScope holds enclosing class/module segments pushed by
+	// QualifyClassName (Ruby constant nesting).
+	ClassScope []string
+	// LexicalScopes holds the qualified names of the enclosing classes, one
+	// per nesting level, while QualifyClassName is in use.
+	LexicalScopes []string
+	// SingletonDepth counts enclosing `class << self` blocks within the
+	// current class (Ruby).
+	SingletonDepth int
 
 	bodies       []body
 	caller       string
@@ -128,6 +156,7 @@ type IndirectRef struct {
 type body struct {
 	caller string
 	node   *tsx.Node
+	locals map[string]bool
 }
 
 // CurrentCaller is the caller id while the call walker runs.
@@ -141,12 +170,28 @@ func (x *Ctx) CurrentCaller() string {
 
 // AddBody registers a function body for call extraction.
 func (x *Ctx) AddBody(caller string, n *tsx.Node) {
-	x.bodies = append(x.bodies, body{caller, n})
+	x.bodies = append(x.bodies, body{caller: caller, node: n})
+}
+
+// AddBodyLocals registers a body whose own locals shadow indirect references
+// only within it (sibling closures tracked under one caller id).
+func (x *Ctx) AddBodyLocals(caller string, n *tsx.Node, locals map[string]bool) {
+	x.bodies = append(x.bodies, body{caller: caller, node: n, locals: locals})
+}
+
+// Bodies returns the registered function bodies.
+func (x *Ctx) Bodies() []*tsx.Node {
+	out := make([]*tsx.Node, len(x.bodies))
+	for i, b := range x.bodies {
+		out[i] = b.node
+	}
+
+	return out
 }
 
 // AddInitializer registers an expression whose calls belong to owner.
 func (x *Ctx) AddInitializer(owner string, n *tsx.Node) {
-	x.initializers = append(x.initializers, body{owner, n})
+	x.initializers = append(x.initializers, body{caller: owner, node: n})
 }
 
 // MarkCallable marks a node id as a callable definition.
@@ -214,6 +259,9 @@ func Extract(cfg *Config, path, root string, src []byte) *model.Extraction {
 	return run(cfg, path, root, tree)
 }
 
+// FindName returns the declaration's name node.
+func (c *Config) FindName(n *tsx.Node) *tsx.Node { return c.name(n) }
+
 func (c *Config) name(n *tsx.Node) *tsx.Node {
 	field := c.NameField
 	if field == "" {
@@ -259,6 +307,33 @@ func run(cfg *Config, path, root string, tree *tsx.Tree) *model.Extraction {
 
 	b.AddFileNode()
 
+	b.OnAdd = func(n *model.Node) {
+		if len(x.NamespaceStack) == 0 && len(x.ScopeStack) == 0 {
+			return
+		}
+
+		if n.Metadata == nil {
+			n.Metadata = map[string]any{}
+		}
+
+		if len(x.NamespaceStack) > 0 {
+			if _, ok := n.Metadata["namespace"]; !ok {
+				n.Metadata["namespace"] = strings.Join(x.NamespaceStack, ".")
+			}
+		}
+
+		if len(x.ScopeStack) > 0 && n.Type != "namespace" {
+			if _, ok := n.Metadata["scope_chain"]; !ok {
+				chain := make([]any, len(x.ScopeStack))
+				for i, s := range x.ScopeStack {
+					chain[i] = s
+				}
+
+				n.Metadata["scope_chain"] = chain
+			}
+		}
+	}
+
 	if cfg.PreScan != nil {
 		cfg.PreScan(x)
 	}
@@ -293,10 +368,21 @@ func run(cfg *Config, path, root string, tree *tsx.Tree) *model.Extraction {
 			}
 
 			className := nameNode.Text()
+
+			var pushed []string
+			if cfg.QualifyClassName != nil {
+				className, pushed = cfg.QualifyClassName(x, className)
+			}
+
 			classID := ids.MakeID(b.Stem, strings.Join(x.NamespaceStack, "."), className)
 			line := n.Line()
+			reopened := b.Has(classID)
 			b.AddNode(classID, className, line)
 			x.MarkCallable(classID, true)
+
+			if cfg.ClassMeta != nil {
+				cfg.ClassMeta(x, n, classID, reopened)
+			}
 
 			if parentClass != "" && parentClass != classID {
 				b.AddEdge(parentClass, classID, "contains", line)
@@ -311,9 +397,25 @@ func run(cfg *Config, path, root string, tree *tsx.Tree) *model.Extraction {
 			}
 
 			if bd := cfg.FindBody(n); bd != nil {
+				x.ClassScope = append(x.ClassScope, pushed...)
+				if cfg.QualifyClassName != nil {
+					x.LexicalScopes = append(x.LexicalScopes, className)
+				}
+
+				prevDepth := x.SingletonDepth
+				x.SingletonDepth = 0
+
 				for _, c := range bd.Children() {
 					walk(c, classID)
 				}
+
+				x.SingletonDepth = prevDepth
+
+				if cfg.QualifyClassName != nil {
+					x.LexicalScopes = x.LexicalScopes[:len(x.LexicalScopes)-1]
+				}
+
+				x.ClassScope = x.ClassScope[:len(x.ClassScope)-len(pushed)]
 			}
 
 			return
@@ -540,10 +642,52 @@ func walkCalls(x *Ctx) {
 		e.ConfidenceScore = model.Score(0.85)
 	}
 
-	var walkC func(n *tsx.Node, caller string)
-	walkC = func(n *tsx.Node, caller string) {
+	tracked := map[[2]uint32]bool{}
+
+	if cfg.DescendClosures != nil {
+		for _, bd := range x.bodies {
+			tracked[[2]uint32{bd.node.StartByte(), bd.node.EndByte()}] = true
+		}
+	}
+
+	isTracked := func(n *tsx.Node) bool {
+		return tracked[[2]uint32{n.StartByte(), n.EndByte()}]
+	}
+
+	union := func(a, b map[string]bool) map[string]bool {
+		if len(b) == 0 {
+			return a
+		}
+
+		out := make(map[string]bool, len(a)+len(b))
+		for k := range a {
+			out[k] = true
+		}
+
+		for k := range b {
+			out[k] = true
+		}
+
+		return out
+	}
+
+	var walkC func(n *tsx.Node, caller string, extra map[string]bool)
+	walkC = func(n *tsx.Node, caller string, extra map[string]bool) {
 		t := n.Type()
 		if cfg.FunctionBoundary.Has(t) {
+			if cfg.DescendClosures != nil && cfg.DescendClosures.Has(t) {
+				if bd := n.Field("body"); bd != nil && !isTracked(bd) {
+					inner := extra
+					if cfg.ScopeLocals != nil {
+						inner = union(extra, cfg.ScopeLocals(n))
+					}
+
+					for _, c := range n.Children() {
+						walkC(c, caller, inner)
+					}
+				}
+			}
+
 			return
 		}
 
@@ -589,6 +733,10 @@ func walkCalls(x *Ctx) {
 					if tgt == "" {
 						tgt = labelToID[callee]
 					}
+
+					if tgt != "" && !nidSourced(tgt) && cfg.DeferStubTarget != nil && cfg.DeferStubTarget(n) {
+						tgt = ""
+					}
 				}
 
 				if tgt != "" && nidSourced(tgt) {
@@ -597,8 +745,8 @@ func walkCalls(x *Ctx) {
 						seen[pair] = true
 						b.AddEdgeCtx(caller, tgt, "calls", n.Line(), "call")
 					}
-				} else if tgt == "" && !(cfg.Lang == "python" && !member && x.LocalNames[caller][callee]) {
-					b.RawCalls = append(b.RawCalls, &model.RawCall{
+				} else if tgt == "" && !(cfg.Lang == "python" && !member && (x.LocalNames[caller][callee] || extra[callee])) {
+					rc := &model.RawCall{
 						CallerID:       caller,
 						Callee:         callee,
 						IsMemberCall:   member,
@@ -606,24 +754,36 @@ func walkCalls(x *Ctx) {
 						Language:       cfg.Lang,
 						SourceFile:     x.Path,
 						SourceLocation: base.Loc(n.Line()),
-					})
+					}
+					if cfg.DecorateRawCall != nil {
+						cfg.DecorateRawCall(x, n, rc)
+					}
+
+					b.RawCalls = append(b.RawCalls, rc)
 				}
 			}
 		}
 
 		if cfg.IndirectRefs != nil {
-			for _, ref := range cfg.IndirectRefs(x, n) {
-				x.emitIndirect(ref, caller, x.LocalNames[caller])
+			if refs := cfg.IndirectRefs(x, n); len(refs) > 0 {
+				locals := union(x.LocalNames[caller], extra)
+				for _, ref := range refs {
+					x.emitIndirect(ref, caller, locals)
+				}
 			}
 		}
 
+		if cfg.ScopeLocals != nil && !cfg.FunctionBoundary.Has(t) {
+			extra = union(extra, cfg.ScopeLocals(n))
+		}
+
 		for _, c := range n.Children() {
-			walkC(c, caller)
+			walkC(c, caller, extra)
 		}
 	}
 
 	for _, bd := range x.bodies {
-		walkC(bd.node, bd.caller)
+		walkC(bd.node, bd.caller, bd.locals)
 	}
 
 	if cfg.ModuleIndirect != nil {
@@ -631,7 +791,7 @@ func walkCalls(x *Ctx) {
 	}
 
 	for _, in := range x.initializers {
-		walkC(in.node, in.caller)
+		walkC(in.node, in.caller, nil)
 	}
 }
 

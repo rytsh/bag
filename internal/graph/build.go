@@ -206,6 +206,11 @@ func Build(nodes []*model.Node, edges []*model.Edge, hyper []*model.Hyperedge, r
 					}
 				}
 			}
+
+			// networkx.Graph.add_edge updates the existing attribute map rather
+			// than replacing it. Preserve attributes omitted by the incoming edge
+			// to match Graphify when two extracted facts collapse onto one pair.
+			mergeMissingEdgeAttrs(&edge, ex)
 		}
 
 		g.SetEdge(&edge)
@@ -235,6 +240,42 @@ func Build(nodes []*model.Node, edges []*model.Edge, hyper []*model.Hyperedge, r
 	disambiguateFileLabels(g)
 
 	return g
+}
+
+func mergeMissingEdgeAttrs(dst, src *model.Edge) {
+	if dst.Context == "" {
+		dst.Context = src.Context
+	}
+
+	if dst.SourceLocation == "" {
+		dst.SourceLocation = src.SourceLocation
+	}
+
+	if dst.ConfidenceScore == nil {
+		dst.ConfidenceScore = src.ConfidenceScore
+	}
+
+	if dst.Metadata == nil && src.Metadata != nil {
+		dst.Metadata = src.Metadata
+		dst.MetaOrder = src.MetaOrder
+	}
+
+	if dst.NoWeight && !src.NoWeight {
+		dst.Weight = src.Weight
+		dst.NoWeight = false
+	}
+
+	if len(src.Extra) > 0 {
+		if dst.Extra == nil {
+			dst.Extra = map[string]any{}
+		}
+
+		for k, v := range src.Extra {
+			if _, ok := dst.Extra[k]; !ok {
+				dst.Extra[k] = v
+			}
+		}
+	}
 }
 
 // oldFileStems returns pre-migration stem forms for a relative path:
@@ -306,10 +347,14 @@ func normSourceFile(p, root string) string {
 	return filepath.ToSlash(p)
 }
 
-// dedupeNodes keeps one node per id (preferring sourced nodes) and merges
-// missing attributes from same-source duplicates.
+// dedupeNodes keeps one node per id, choosing the survivor by Graphify's
+// collision rank, and merges missing attributes from same-source duplicates
+// in rank order.
+//
+// Adapted from Graphify's dedup.deduplicate_entities pre-pass (Apache-2.0).
 func dedupeNodes(nodes []*model.Node, root string) []*model.Node {
 	seen := map[string]*model.Node{}
+	dropped := map[string][]*model.Node{}
 
 	var order []string
 
@@ -326,14 +371,29 @@ func dedupeNodes(nodes []*model.Node, root string) []*model.Node {
 			continue
 		}
 
-		if collisionRank(n) < collisionRank(inc) {
-			if n.SourceFile == inc.SourceFile {
-				mergeMissing(n, inc)
-			}
-
+		if rankLess(n, inc, root) {
 			seen[n.ID] = n
-		} else if n.SourceFile == inc.SourceFile {
-			mergeMissing(inc, n)
+			dropped[n.ID] = append(dropped[n.ID], inc)
+		} else {
+			dropped[n.ID] = append(dropped[n.ID], n)
+		}
+	}
+
+	for id, losers := range dropped {
+		surv := seen[id]
+
+		var same []*model.Node
+
+		for _, l := range losers {
+			if surv.SourceFile != "" && l.SourceFile == surv.SourceFile {
+				same = append(same, l)
+			}
+		}
+
+		sort.SliceStable(same, func(i, j int) bool { return rankLess(same[i], same[j], root) })
+
+		for _, l := range same {
+			mergeMissing(surv, l)
 		}
 	}
 
@@ -342,22 +402,109 @@ func dedupeNodes(nodes []*model.Node, root string) []*model.Node {
 		out = append(out, seen[id])
 	}
 
-	_ = root
-
 	return out
 }
 
-func collisionRank(n *model.Node) int {
-	r := 0
-	if n.SourceFile == "" {
-		r += 2
+var (
+	activePathSegments   = base.NewSet("in-progress", "in_progress", "active", "current", "wip")
+	archivedPathSegments = base.NewSet("_done", "done", "archive", "archived", "backup", "bak", "old",
+		"attic", "graveyard", "completed")
+)
+
+func rankPath(sf, root string) string {
+	sf = strings.ReplaceAll(sf, `\`, "/")
+	if root != "" && sf != "" {
+		p := sf
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(root, p)
+		}
+
+		if r, err := filepath.Rel(root, p); err == nil && !strings.HasPrefix(r, "..") {
+			return filepath.ToSlash(r)
+		}
 	}
 
-	if n.SourceLocation == "" {
-		r++
+	return sf
+}
+
+func lifecyclePenalty(rp string) int {
+	segs := strings.Split(strings.ToLower(rp), "/")
+	best, marked := 2, false
+
+	for _, s := range segs[:max(len(segs)-1, 0)] {
+		switch {
+		case activePathSegments.Has(s):
+			return 0
+		case archivedPathSegments.Has(s):
+			marked = true
+		}
 	}
 
-	return r
+	if !marked {
+		return 1
+	}
+
+	return best
+}
+
+// definesID reports whether n's source_file is the file its id encodes.
+func definesID(n *model.Node) bool {
+	if n.ID == "" || n.SourceFile == "" {
+		return false
+	}
+
+	for p := range idPrefixes(n.SourceFile) {
+		if n.ID == p || strings.HasPrefix(n.ID, p+"_") {
+			return true
+		}
+	}
+
+	return false
+}
+
+// rankLess orders ID-collision candidates: definers first, then active paths,
+// shorter labels, lexical label, and reversed path segments.
+//
+// Adapted from Graphify's dedup._collision_rank (Apache-2.0).
+func rankLess(a, b *model.Node, root string) bool {
+	if da, db := definesID(a), definesID(b); da != db {
+		return da
+	}
+
+	ra, rb := rankPath(a.SourceFile, root), rankPath(b.SourceFile, root)
+	if pa, pb := lifecyclePenalty(ra), lifecyclePenalty(rb); pa != pb {
+		return pa < pb
+	}
+
+	if la, lb := len([]rune(a.Label)), len([]rune(b.Label)); la != lb {
+		return la < lb
+	}
+
+	if a.Label != b.Label {
+		return a.Label < b.Label
+	}
+
+	sa, sb := reversedSegs(ra), reversedSegs(rb)
+	for i := 0; i < len(sa) && i < len(sb); i++ {
+		if sa[i] != sb[i] {
+			return sa[i] < sb[i]
+		}
+	}
+
+	return len(sa) < len(sb)
+}
+
+func reversedSegs(p string) []string {
+	var out []string
+
+	parts := strings.Split(p, "/")
+	for i := len(parts) - 1; i >= 0; i-- {
+		if parts[i] != "" && parts[i] != "." {
+			out = append(out, parts[i])
+		}
+	}
+
+	return out
 }
 
 func mergeMissing(dst, src *model.Node) {

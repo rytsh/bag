@@ -25,8 +25,26 @@ type Config struct {
 	// Workers is the AST extraction parallelism (0 = NumCPU).
 	Workers int `cfg:"workers"`
 
-	LLM    LLM    `cfg:"llm"`
-	Server Server `cfg:"server"`
+	LLM        LLM        `cfg:"llm"`
+	Transcribe Transcribe `cfg:"transcribe"`
+	Server     Server     `cfg:"server"`
+}
+
+// Transcribe configures video/audio transcription for --semantic. Any
+// OpenAI-compatible /audio/transcriptions endpoint works (OpenAI, Groq,
+// LocalAI, speaches/faster-whisper-server...). BaseURL and APIKey fall back
+// to the LLM settings.
+type Transcribe struct {
+	BaseURL  string `cfg:"base_url"`
+	APIKey   string `cfg:"api_key" log:"-"`
+	Model    string `cfg:"model" default:"whisper-1"`
+	Language string `cfg:"language"`
+	// MaxUploadMB is the per-request upload limit; larger files are split
+	// with ffmpeg.
+	MaxUploadMB int `cfg:"max_upload_mb" default:"25"`
+	// FFmpeg is the ffmpeg binary ("" = PATH lookup, "-" = disabled).
+	FFmpeg  string `cfg:"ffmpeg"`
+	Timeout string `cfg:"timeout" default:"600s"`
 }
 
 // LLM configures the optional semantic extraction backend. Any

@@ -47,6 +47,19 @@ func (c *corpus) runPreRewireResolvers() {
 	}
 }
 
+var postRewireResolvers []Resolver
+
+// RegisterPostRewireResolver adds a resolver that runs after the unique-stub
+// rewire and before the shared call pass.
+func RegisterPostRewireResolver(r Resolver) { postRewireResolvers = append(postRewireResolvers, r) }
+
+func (c *corpus) runPostRewireResolvers() {
+	per := c.fileResults()
+	for _, r := range postRewireResolvers {
+		r(c.root, &c.nodes, &c.edges, per)
+	}
+}
+
 // RegisterResolver adds a resolver run after the shared call pass.
 func RegisterResolver(r Resolver) { resolvers = append(resolvers, r) }
 

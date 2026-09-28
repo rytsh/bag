@@ -17,6 +17,50 @@ var (
 	jsxElementTypes      = base.NewSet("jsx_opening_element", "jsx_self_closing_element")
 )
 
+// jsDeclValue returns a declarator's value, unwrapping gotreesitter's
+// misparse of a generic async arrow (`async <T>({ a, }: X<T>) => ...` read as
+// `async < T > (arrow)`) to the arrow function tree-sitter proper produces.
+func jsDeclValue(v *tsx.Node) *tsx.Node {
+	if v == nil || v.Type() != "binary_expression" {
+		return v
+	}
+
+	l, r := v.Field("left"), v.Field("right")
+	if l == nil || r == nil || r.Type() != "arrow_function" || l.Type() != "binary_expression" {
+		return v
+	}
+
+	if a, op := l.Field("left"), l.Field("operator"); a == nil || op == nil || a.Text() != "async" || op.Text() != "<" {
+		return v
+	}
+
+	if op := v.Field("operator"); op == nil || op.Text() != ">" {
+		return v
+	}
+
+	return r
+}
+
+// jsMisparsedGenericCall reports gotreesitter's misparse of a generic call
+// (`f<T>(x)` read as `(f < T) > (x)`), which tree-sitter proper parses as a
+// call_expression.
+func jsMisparsedGenericCall(v *tsx.Node) bool {
+	if v == nil || v.Type() != "binary_expression" {
+		return false
+	}
+
+	l, r, op := v.Field("left"), v.Field("right"), v.Field("operator")
+	if l == nil || r == nil || op == nil || op.Text() != ">" || r.Type() != "parenthesized_expression" ||
+		l.Type() != "binary_expression" {
+		return false
+	}
+
+	lop, callee := l.Field("operator"), l.Field("left")
+
+	return lop != nil && lop.Text() == "<" && callee != nil &&
+		(callee.Type() == "identifier" || callee.Type() == "member_expression")
+}
+
 // jsTargetID converts resolveJSTarget output to a node id.
 func jsTargetID(target string) string {
 	if strings.HasPrefix(target, "ref\x00") {
@@ -78,6 +122,8 @@ func jsImport(x *generic.Ctx, n *tsx.Node) [][2]string {
 			}
 
 			e := b.AddEdgeCtx(b.FileID, tgt, "imports_from", n.Line(), ctx)
+			e.TargetFile = rp
+
 			if typeOnly {
 				e.Extra = map[string]any{"type_only": true}
 			}
@@ -110,6 +156,8 @@ func jsImport(x *generic.Ctx, n *tsx.Node) [][2]string {
 				}
 
 				e := b.AddEdgeCtx(b.FileID, ids.MakeID(targetStem, nn.Text()), "re_exports", line, "re-export")
+				e.TargetFile = resolved
+
 				if typeOnly {
 					e.Extra = map[string]any{"type_only": true}
 				}
@@ -135,7 +183,8 @@ func jsImport(x *generic.Ctx, n *tsx.Node) [][2]string {
 				}
 
 				if nn := spec.Field("name"); nn != nil {
-					b.AddEdgeCtx(b.FileID, ids.MakeID(targetStem, nn.Text()), "imports", line, "import")
+					e := b.AddEdgeCtx(b.FileID, ids.MakeID(targetStem, nn.Text()), "imports", line, "import")
+					e.TargetFile = resolved
 				}
 			}
 		}
@@ -270,6 +319,7 @@ func jsNestedFunctions(x *generic.Ctx, container *tsx.Node, parent string) {
 			x.B.AddNode(id, nn.Text()+"()", c.Line())
 			x.B.AddEdge(parent, id, "contains", c.Line())
 			x.MarkCallable(id, false)
+			x.LocalNames[id] = jsLocalNames(c)
 
 			if bd := c.Field("body"); bd != nil {
 				x.AddBody(id, bd)
@@ -352,6 +402,7 @@ func jsExtraWalk(x *generic.Ctx, n *tsx.Node, parentClass string) bool {
 
 					if id != "" {
 						x.MarkCallable(id, false)
+						x.LocalNames[id] = jsLocalNames(value)
 
 						if bd := value.Field("body"); bd != nil {
 							x.AddBody(id, bd)
@@ -372,13 +423,14 @@ func jsExtraWalk(x *generic.Ctx, n *tsx.Node, parentClass string) bool {
 			prop = n.Field("name")
 		}
 
-		value := n.Field("value")
+		value := jsDeclValue(n.Field("value"))
 		if prop != nil && value != nil && jsFunctionValueTypes.Has(value.Type()) {
 			if name := prop.Text(); name != "" {
 				id := ids.MakeID(parentClass, name)
 				b.AddNode(id, "."+name+"()", n.Line())
 				b.AddEdge(parentClass, id, "method", n.Line())
 				x.MarkCallable(id, false)
+				x.LocalNames[id] = jsLocalNames(value)
 
 				if bd := value.Field("body"); bd != nil {
 					x.AddBody(id, bd)
@@ -408,7 +460,7 @@ func jsExtraWalk(x *generic.Ctx, n *tsx.Node, parentClass string) bool {
 				continue
 			}
 
-			value, name := c.Field("value"), c.Field("name")
+			value, name := jsDeclValue(c.Field("value")), c.Field("name")
 			exportedScalar := exported && name != nil && name.Type() == "identifier" && ids.NormalizeID(name.Text()) != ""
 			line := c.Line()
 
@@ -422,6 +474,7 @@ func jsExtraWalk(x *generic.Ctx, n *tsx.Node, parentClass string) bool {
 				b.AddNode(id, name.Text()+"()", line)
 				b.AddEdge(b.FileID, id, "contains", line)
 				x.MarkCallable(id, false)
+				x.LocalNames[id] = jsLocalNames(value)
 
 				if bd := value.Field("body"); bd != nil {
 					x.AddBody(id, bd)
@@ -429,7 +482,7 @@ func jsExtraWalk(x *generic.Ctx, n *tsx.Node, parentClass string) bool {
 				}
 
 				found = true
-			case value != nil && (exportedScalar || base.NewSet("object", "array", "as_expression",
+			case value != nil && (exportedScalar || jsMisparsedGenericCall(value) || base.NewSet("object", "array", "as_expression",
 				"satisfies_expression", "call_expression", "new_expression").Has(value.Type())):
 				if name != nil && name.Type() == "object_pattern" && exported {
 					for _, p := range name.NamedChildren() {
@@ -470,13 +523,13 @@ func jsExtraWalk(x *generic.Ctx, n *tsx.Node, parentClass string) bool {
 						}
 					}
 
-					if inner != nil && (inner.Type() == "call_expression" || inner.Type() == "new_expression") {
+					if inner != nil && (inner.Type() == "call_expression" || inner.Type() == "new_expression" || jsMisparsedGenericCall(inner)) {
 						var cl []*tsx.Node
 						jsTopmostClosures(inner, &cl)
 
 						for _, cc := range cl {
 							if bd := cc.Field("body"); bd != nil {
-								x.AddBody(cid, bd)
+								x.AddBodyLocals(cid, bd, jsLocalNames(cc))
 							}
 						}
 					}
@@ -566,6 +619,8 @@ func tsExtraWalk(x *generic.Ctx, n *tsx.Node, parentClass string) bool {
 }
 
 func jsFunctionHook(x *generic.Ctx, n *tsx.Node, funcID string, _ int) {
+	x.LocalNames[funcID] = jsLocalNames(n)
+
 	if bd := n.Field("body"); bd != nil {
 		jsNestedFunctions(x, bd, funcID)
 	}
@@ -599,6 +654,10 @@ func jsCallName(x *generic.Ctx, n *tsx.Node) (string, bool, string) {
 		}
 	}
 
+	if c, ok := jsAwaitGenericCallee(n); ok {
+		return c, false, ""
+	}
+
 	callee, member, recv := generic.DefaultCallName(x.Cfg, n)
 	if member && strings.HasPrefix(recv, "this.") {
 		recv = strings.TrimPrefix(recv, "this.")
@@ -607,6 +666,36 @@ func jsCallName(x *generic.Ctx, n *tsx.Node) (string, bool, string) {
 	}
 
 	return callee, member, recv
+}
+
+// jsAwaitGenericCallee mirrors tree-sitter-typescript's parse of
+// `await f<T>(x)`: the await is folded into the callee
+// (call_expression(function: await_expression)), so Graphify records the raw
+// callee text `await f` — a name that never resolves. gotreesitter parses the
+// await around the call instead; reproduce the reference callee.
+func jsAwaitGenericCallee(n *tsx.Node) (string, bool) {
+	if n.Type() != "call_expression" || n.Field("type_arguments") == nil {
+		return "", false
+	}
+
+	p := n.Parent()
+	if p == nil || p.Type() != "await_expression" {
+		return "", false
+	}
+
+	fn := n.Field("function")
+	if fn == nil || (fn.Type() != "identifier" && fn.Type() != "member_expression") {
+		return "", false
+	}
+
+	// Only the leftmost call of the await operand is re-associated.
+	src := p.Text()
+	i := strings.Index(src, fn.Text())
+	if i < 0 {
+		return "", false
+	}
+
+	return src[:i+len(fn.Text())], true
 }
 
 func jsDynamicImport(x *generic.Ctx, n *tsx.Node) {
@@ -648,48 +737,7 @@ func jsDynamicImport(x *generic.Ctx, n *tsx.Node) {
 	}
 }
 
-func jsClassHook(x *generic.Ctx, n *tsx.Node, classID string, line int) {
-	for _, c := range n.Children() {
-		if c.Type() != "class_heritage" {
-			continue
-		}
-
-		for _, h := range c.Children() {
-			switch h.Type() {
-			case "extends_clause":
-				for _, v := range h.NamedChildren() {
-					name := v.Text()
-					if v.Type() == "generic_type" || v.Type() == "call_expression" {
-						if nn := v.NamedChildren(); len(nn) > 0 {
-							name = nn[0].Text()
-						}
-					}
-
-					if name != "" && isIdentLike(name) {
-						x.B.AddEdge(classID, x.EnsureNamed(lastSeg(name, ".")), "inherits", line)
-					}
-
-					break
-				}
-			case "implements_clause":
-				for _, v := range h.NamedChildren() {
-					name := v.Text()
-					if v.Type() == "generic_type" {
-						if nn := v.NamedChildren(); len(nn) > 0 {
-							name = nn[0].Text()
-						}
-					}
-
-					if name != "" && isIdentLike(name) {
-						x.B.AddEdge(classID, x.EnsureNamed(lastSeg(name, ".")), "implements", line)
-					}
-				}
-			case "identifier", "member_expression":
-				x.B.AddEdge(classID, x.EnsureNamed(lastSeg(h.Text(), ".")), "inherits", line)
-			}
-		}
-	}
-
+func jsClassHook(x *generic.Ctx, n *tsx.Node, classID string, _ int) {
 	jsDecorators(x, n, classID)
 }
 
@@ -820,8 +868,46 @@ func jsDecorators(x *generic.Ctx, classNode *tsx.Node, classID string) {
 }
 
 func jsBodyNode(x *generic.Ctx, n *tsx.Node, caller string) {
-	if n.Type() == "lexical_declaration" || n.Type() == "variable_declaration" {
+	switch n.Type() {
+	case "lexical_declaration", "variable_declaration":
 		jsRequireImports(x, n, caller)
+	case "import_type":
+		// tree-sitter-typescript parses `typeof import('x')` in a type as a
+		// call_expression, so Graphify records it as a deferred import.
+		jsImportTypeAsDynamic(x, n)
+	}
+}
+
+func jsImportTypeAsDynamic(x *generic.Ctx, n *tsx.Node) {
+	// Graphify's _normalize_ts_import_types blanks import(...) in the type
+	// arguments of a call the reference grammar cannot parse (`f<typeof
+	// import('x')>()`, empty argument list); with arguments it reads as a
+	// comparison and keeps the import call.
+	for p := n.Parent(); p != nil; p = p.Parent() {
+		if p.Type() != "type_arguments" {
+			continue
+		}
+
+		if call := p.Parent(); call != nil && (call.Type() == "call_expression" || call.Type() == "new_expression") {
+			if args := call.Field("arguments"); args != nil && len(args.NamedChildren()) == 0 {
+				return
+			}
+		}
+	}
+
+	arg := n.Field("argument")
+	if arg == nil || arg.Type() != "string" {
+		return
+	}
+
+	raw := jsStringArg(arg)
+	if raw == "" {
+		return
+	}
+
+	if target, _, ok := resolveJSTarget(raw, x.Path); ok {
+		e := x.B.AddEdgeCtx(x.CurrentCaller(), jsTargetID(target), "imports_from", n.Line(), "import")
+		e.Extra = map[string]any{"deferred": true}
 	}
 }
 
@@ -886,8 +972,6 @@ func jsRationale(x *generic.Ctx) {
 			b.AddEdge(b.FileID, rid, "cites", lineNo)
 		}
 	}
-
-	jsRescueDynamicImports(x)
 }
 
 func zfill(s string, n int) string {
@@ -899,8 +983,9 @@ func zfill(s string, n int) string {
 }
 
 // jsRescueDynamicImports recovers module-level import() edges the call
-// walker never visits (Graphify's _rescue_js_dynamic_imports).
-func jsRescueDynamicImports(x *generic.Ctx) {
+// walker never visits. It runs on the finished extraction, after the call
+// walk recorded its deferred imports (Graphify's _rescue_js_dynamic_imports).
+func jsRescueDynamicImports(x *generic.Ctx, res *model.Extraction) {
 	src := string(x.Tree.Src)
 	if !strings.Contains(src, "import") {
 		return
@@ -908,8 +993,13 @@ func jsRescueDynamicImports(x *generic.Ctx) {
 
 	b := x.B
 	deferred := map[string]bool{}
+	existing := map[string]bool{}
 
-	for _, e := range b.Edges {
+	for _, n := range res.Nodes {
+		existing[n.ID] = true
+	}
+
+	for _, e := range res.Edges {
 		if e.Extra["deferred"] == true && e.Relation == "imports_from" && e.Source == b.FileID {
 			deferred[e.Target] = true
 		}
@@ -952,22 +1042,21 @@ func jsRescueDynamicImports(x *generic.Ctx) {
 		}
 
 		rescued[key] = true
-		line := strings.Count(src[:m[0]], "\n") + 1
 
 		e := &model.Edge{
 			Source: b.FileID, Target: id, Relation: "dynamic_import",
-			Confidence: model.Extracted, SourceFile: x.Path,
-		}
-		_ = line
-
-		if resolved == "" && !b.Has(id) {
-			n := b.AddNode(id, raw, 0)
-			n.SourceFile = stubSF
-			n.SourceLocation = ""
-			n.Extra = map[string]any{"confidence": model.Extracted}
+			Confidence: model.Extracted, SourceFile: x.Path, NoWeight: true,
 		}
 
-		b.Edges = append(b.Edges, e)
+		if resolved == "" && !existing[id] {
+			existing[id] = true
+			res.Nodes = append(res.Nodes, &model.Node{
+				ID: id, Label: raw, FileType: model.FileTypeCode, SourceFile: stubSF,
+				Extra: map[string]any{"confidence": model.Extracted},
+			})
+		}
+
+		res.Edges = append(res.Edges, e)
 	}
 }
 
@@ -1027,6 +1116,16 @@ func newJSConfig(lang, grammar string, tsx bool) *generic.Config {
 		CallName:      jsCallName,
 		BodyNode:      jsBodyNode,
 		Rationale:     jsRationale,
+		PostProcess:   tsPostProcess,
+		DescendClosures: base.NewSet("arrow_function", "function_expression", "function_declaration",
+			"generator_function_declaration", "generator_function"),
+		IndirectRefs:   jsIndirectRefs,
+		ModuleIndirect: jsModuleIndirect,
+		ScopeLocals:    jsScopeLocals,
+		PreScan: func(x *generic.Ctx) {
+			x.LocalNames = map[string]map[string]bool{}
+			x.ExternalImports = jsExternalImportNames(x.Tree.Root, x.Path)
+		},
 	}
 
 	if lang == "typescript" {

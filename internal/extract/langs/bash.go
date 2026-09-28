@@ -245,7 +245,7 @@ func ExtractBash(path, _ string, src []byte) *model.Extraction {
 			addEdge(parent, fid, "defines", n.Line(), "", "")
 
 			bd := n.ChildOfType("compound_statement")
-			funcBodies = append(funcBodies, rustBody{fid, bd})
+			funcBodies = append(funcBodies, rustBody{id: fid, node: bd})
 
 			if bd != nil {
 				walk(bd, fid)

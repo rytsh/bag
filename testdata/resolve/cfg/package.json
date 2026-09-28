@@ -1,0 +1,1 @@
+{"name":"x","dependencies":{"react":"1"},"extends":"base","compilerOptions":{"lib":["dom"],"paths":{"$ref":"#/x"}}}

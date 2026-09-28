@@ -406,6 +406,8 @@ func javaFunctionHook(x *generic.Ctx, n *tsx.Node, funcID string, line int) {
 		return
 	}
 
+	javaRecordMethodScope(x, n, funcID)
+
 	if params := n.Field("parameters"); params != nil {
 		for _, p := range params.Children() {
 			if p.Type() != "formal_parameter" {
@@ -479,6 +481,8 @@ func javaExtraWalk(x *generic.Ctx, n *tsx.Node, parentClass string) bool {
 		if parentClass == "" {
 			return false
 		}
+
+		javaRecordFields(x, parentClass, n)
 
 		var refs []typeRef
 		javaTypeRefs(n.Field("type"), false, &refs, nil, false)
@@ -569,27 +573,11 @@ var javaConfig = &generic.Config{
 	ExtraWalk:         javaExtraWalk,
 	CallName:          javaCallName,
 	DeferMember:       func(member bool, _ string) bool { return member },
-}
-
-var groovyConfig = &generic.Config{
-	Lang:              "groovy",
-	Grammar:           "groovy",
-	ClassTypes:        base.NewSet("class_declaration", "interface_declaration"),
-	FunctionTypes:     base.NewSet("method_declaration", "constructor_declaration"),
-	ImportTypes:       base.NewSet("import_declaration"),
-	CallTypes:         base.NewSet("method_invocation"),
-	CallFunctionField: "name",
-	FunctionBoundary:  base.NewSet("method_declaration", "constructor_declaration"),
-	ImportHandler:     javaImport,
-	ClassHook:         javaClassHook,
+	DecorateRawCall:   javaDecorateRawCall,
+	PostProcess:       javaPostProcess,
 }
 
 // ExtractJava extracts a Java file.
 func ExtractJava(path, root string, src []byte) *model.Extraction {
 	return generic.Extract(javaConfig, path, root, src)
-}
-
-// ExtractGroovy extracts a Groovy file.
-func ExtractGroovy(path, root string, src []byte) *model.Extraction {
-	return generic.Extract(groovyConfig, path, root, src)
 }

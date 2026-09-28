@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/rytsh/bag/internal/extract/base"
 	"github.com/rytsh/bag/internal/extract/generic"
@@ -116,12 +117,22 @@ func pyTypeRefs(n *tsx.Node, generic bool, out *[]typeRef) {
 }
 
 func emitRefs(x *generic.Ctx, from string, line int, refs []typeRef, def string) {
+	emitRefsSeen(x, from, line, refs, def, map[string]bool{})
+}
+
+func emitRefsSeen(x *generic.Ctx, from string, line int, refs []typeRef, def string, seen map[string]bool) {
 	for _, r := range refs {
 		ctx := def
 		if r.role == "generic_arg" {
 			ctx = "generic_arg"
 		}
 
+		key := r.name + "\x00" + ctx
+		if seen[key] {
+			continue
+		}
+
+		seen[key] = true
 		x.Ref(from, x.EnsureNamed(r.name), line, ctx)
 	}
 }
@@ -212,6 +223,12 @@ func resolvePyModule(module, current, root string, level int) string {
 		return hit
 	}
 
+	if stripped, ok := stripScanRootNamespace(module, root); ok {
+		if hit := probePy(filepath.Join(root, strings.ReplaceAll(stripped, ".", "/"))); hit != "" {
+			return hit
+		}
+	}
+
 	for anc := filepath.Dir(current); ; anc = filepath.Dir(anc) {
 		if r, err := filepath.Rel(root, anc); err != nil || strings.HasPrefix(r, "..") {
 			break
@@ -231,6 +248,113 @@ func resolvePyModule(module, current, root string, level int) string {
 	return ""
 }
 
+// resolvePyNamespaceDir returns the PEP 420 namespace-package directory (no
+// __init__.py, inside root) a `from <module> import ...` names, or "".
+//
+// Adapted from Graphify's _resolve_python_namespace_dir (Apache-2.0).
+func resolvePyNamespaceDir(module, current, root string, level int) string {
+	ns := func(cand string) string {
+		if !isDir(cand) || isFile(filepath.Join(cand, "__init__.py")) {
+			return ""
+		}
+
+		if r, err := filepath.Rel(root, cand); err != nil || r == ".." || strings.HasPrefix(r, "../") {
+			return ""
+		}
+
+		return cand
+	}
+
+	if level > 0 {
+		b := filepath.Dir(current)
+		for i := 0; i < level-1; i++ {
+			b = filepath.Dir(b)
+		}
+
+		if module != "" {
+			b = filepath.Join(b, strings.ReplaceAll(module, ".", "/"))
+		}
+
+		return ns(b)
+	}
+
+	if module == "" {
+		return ""
+	}
+
+	rel := strings.ReplaceAll(module, ".", "/")
+	if hit := ns(filepath.Join(root, rel)); hit != "" {
+		return hit
+	}
+
+	if stripped, ok := stripScanRootNamespace(module, root); ok {
+		if hit := ns(filepath.Join(root, strings.ReplaceAll(stripped, ".", "/"))); hit != "" {
+			return hit
+		}
+	}
+
+	for anc := filepath.Dir(current); ; anc = filepath.Dir(anc) {
+		if r, err := filepath.Rel(root, anc); err != nil || strings.HasPrefix(r, "..") {
+			break
+		}
+
+		if anc != root && !isFile(filepath.Join(anc, "__init__.py")) {
+			if hit := ns(filepath.Join(anc, rel)); hit != "" {
+				return hit
+			}
+		}
+
+		if anc == root || filepath.Dir(anc) == anc {
+			break
+		}
+	}
+
+	return ""
+}
+
+var scanRootNamespaces sync.Map
+
+// stripScanRootNamespace removes the dotted package namespace of root from an
+// absolute module name when root sits inside a package chain
+// (root = Team/, `Company.Apps.Team.lib` -> `lib`).
+//
+// Adapted from Graphify's _infer_scan_root_namespace (Apache-2.0).
+func stripScanRootNamespace(module, root string) (string, bool) {
+	var ns string
+
+	if v, ok := scanRootNamespaces.Load(root); ok {
+		ns = v.(string)
+	} else {
+		parts := []string{filepath.Base(root)}
+
+		for cur := root; ; {
+			parent := filepath.Dir(cur)
+			if parent == cur || !isFile(filepath.Join(parent, "__init__.py")) {
+				break
+			}
+
+			parts = append(parts, filepath.Base(parent))
+			cur = parent
+		}
+
+		if len(parts) > 1 {
+			for i, j := 0, len(parts)-1; i < j; i, j = i+1, j-1 {
+				parts[i], parts[j] = parts[j], parts[i]
+			}
+
+			ns = strings.Join(parts, ".")
+		}
+
+		scanRootNamespaces.Store(root, ns)
+	}
+
+	if ns == "" || (module != ns && !strings.HasPrefix(module, ns+".")) {
+		return "", false
+	}
+
+	return strings.TrimPrefix(strings.TrimPrefix(module, ns), "."), true
+}
+
 func pyImport(x *generic.Ctx, n *tsx.Node) [][2]string {
 	b := x.B
 	root := x.Root
@@ -243,8 +367,9 @@ func pyImport(x *generic.Ctx, n *tsx.Node) [][2]string {
 			}
 
 			raw := c.Text()
-			mod, _, _ := strings.Cut(raw, " as ")
+			mod, alias, _ := strings.Cut(raw, " as ")
 			mod = strings.TrimLeft(strings.TrimSpace(mod), ".")
+			alias = strings.TrimSpace(alias)
 
 			tp := resolvePyModule(mod, x.Path, root, 0)
 			if tp == x.Path {
@@ -256,7 +381,14 @@ func pyImport(x *generic.Ctx, n *tsx.Node) [][2]string {
 				tgt = ids.MakeID(tp)
 			}
 
-			b.AddEdgeCtx(b.FileID, tgt, "imports", n.Line(), "import")
+			local := alias
+			if local == "" {
+				local, _, _ = strings.Cut(mod, ".")
+			}
+
+			e := b.AddEdgeCtx(b.FileID, tgt, "imports", n.Line(), "import")
+			e.LocalAlias = alias
+			e.PyImport = &model.PyImport{Module: mod, Bindings: [][2]string{{mod, local}}, ModuleBinding: true, TargetFile: tp}
 		}
 	case "import_from_statement":
 		mn := n.Field("module_name")
@@ -290,7 +422,14 @@ func pyImport(x *generic.Ctx, n *tsx.Node) [][2]string {
 			tgt = ids.MakeID(tp)
 		} else {
 			tp := resolvePyModule(raw, x.Path, root, 0)
-			if tp == "" && isDir(filepath.Join(root, strings.ReplaceAll(raw, ".", "/"))) {
+			if tp == "" && resolvePyNamespaceDir(raw, x.Path, root, 0) != "" {
+				// A namespace package has no file node; keep a marker so the
+				// ambiguous-module guard still sees the bindings.
+				b.Edges = append(b.Edges, &model.Edge{
+					Source: b.FileID, Relation: pyImportMarker, SourceFile: x.Path,
+					PyImport: &model.PyImport{Module: raw, Bindings: pyImportBindings(n), MarkerOnly: true},
+				})
+
 				return nil
 			}
 
@@ -302,12 +441,36 @@ func pyImport(x *generic.Ctx, n *tsx.Node) [][2]string {
 			if tp != "" {
 				tgt = ids.MakeID(tp)
 			}
+
+			e := b.AddEdgeCtx(b.FileID, tgt, "imports_from", n.Line(), "import")
+			e.PyImport = &model.PyImport{Module: raw, Bindings: pyImportBindings(n), TargetFile: tp}
+
+			return nil
 		}
 
 		b.AddEdgeCtx(b.FileID, tgt, "imports_from", n.Line(), "import")
 	}
 
 	return nil
+}
+
+// pyImportMarker is the relation of a transient namespace-import marker edge.
+const pyImportMarker = "_python_import_marker"
+
+// pyImportBindings returns (imported, local) pairs, with ("*", "*") for a
+// wildcard import.
+//
+// Adapted from Graphify's _python_import_bindings (Apache-2.0).
+func pyImportBindings(n *tsx.Node) [][2]string {
+	out := pyImportedNames(n)
+
+	for _, c := range n.Children() {
+		if c.Type() == "wildcard_import" {
+			out = append(out, [2]string{"*", "*"})
+		}
+	}
+
+	return out
 }
 
 func pyClassHook(x *generic.Ctx, n *tsx.Node, classID string, line int) {
@@ -482,6 +645,7 @@ func pyFunctionHook(x *generic.Ctx, n *tsx.Node, funcID string, line int) {
 	pyNested(x, n.Field("body"), funcID)
 
 	var refs []typeRef
+	seen := map[string]bool{}
 
 	if params := n.Field("parameters"); params != nil {
 		for _, c := range params.Children() {
@@ -491,11 +655,11 @@ func pyFunctionHook(x *generic.Ctx, n *tsx.Node, funcID string, line int) {
 		}
 	}
 
-	emitRefs(x, funcID, line, refs, "parameter_type")
+	emitRefsSeen(x, funcID, line, refs, "parameter_type", seen)
 
 	refs = nil
 	pyTypeRefs(n.Field("return_type"), false, &refs)
-	emitRefs(x, funcID, line, refs, "return_type")
+	emitRefsSeen(x, funcID, line, refs, "return_type", seen)
 
 	pyDecorators(x, n, funcID)
 }

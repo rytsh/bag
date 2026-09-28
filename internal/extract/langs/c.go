@@ -352,6 +352,84 @@ var cppConfig = &generic.Config{
 	ClassHook:           cppClassHook,
 	ExtraWalk:           cppExtraWalk,
 	CallName:            cppCallName,
+	PostProcess:         cppPostProcess,
+}
+
+// cppPostProcess records the file's `var -> ClassName` table from local
+// declarations in every function body (Graphify's cpp_type_table).
+func cppPostProcess(x *generic.Ctx, res *model.Extraction) {
+	table := map[string]string{}
+	for _, bd := range x.Bodies() {
+		cppLocalVarTypes(bd, table)
+	}
+
+	if len(table) > 0 {
+		res.TypeTable = table
+	}
+}
+
+// cppDeclaratorName returns the bare variable name of a declarator
+// (`*f`, `&r`, `f = Foo()`), or "" for anything else.
+//
+// Adapted from Graphify's _cpp_declarator_name (Apache-2.0).
+func cppDeclaratorName(n *tsx.Node) string {
+	switch n.Type() {
+	case "identifier":
+		return n.Text()
+	case "pointer_declarator", "reference_declarator", "init_declarator":
+		inner := n.Field("declarator")
+		if inner == nil {
+			inner = n.ChildOfType("identifier", "pointer_declarator", "reference_declarator")
+		}
+
+		if inner != nil {
+			return cppDeclaratorName(inner)
+		}
+	}
+
+	return ""
+}
+
+// cppLocalVarTypes collects `var -> ClassName` from single-declarator local
+// declarations of a class-like type, without entering nested functions.
+//
+// Adapted from Graphify's _cpp_local_var_types (Apache-2.0).
+func cppLocalVarTypes(body *tsx.Node, table map[string]string) {
+	stack := []*tsx.Node{body}
+
+	for len(stack) > 0 {
+		n := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+
+		if (n.Type() == "function_definition" || n.Type() == "lambda_expression") && n != body {
+			continue
+		}
+
+		if n.Type() == "declaration" {
+			if tn := n.Field("type"); tn != nil && (tn.Type() == "type_identifier" || tn.Type() == "qualified_identifier") {
+				tname := strings.TrimSpace(lastSeg(tn.Text(), "::"))
+
+				var decls []*tsx.Node
+
+				for _, c := range n.Children() {
+					switch c.Type() {
+					case "identifier", "pointer_declarator", "reference_declarator", "init_declarator":
+						decls = append(decls, c)
+					}
+				}
+
+				if tname != "" && upperStart(tname) && len(decls) == 1 {
+					if v := cppDeclaratorName(decls[0]); v != "" {
+						if _, ok := table[v]; !ok {
+							table[v] = tname
+						}
+					}
+				}
+			}
+		}
+
+		stack = append(stack, n.Children()...)
+	}
 }
 
 // ExtractC extracts a C file.

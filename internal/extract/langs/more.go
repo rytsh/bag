@@ -598,7 +598,8 @@ func rubyClassHook(x *generic.Ctx, n *tsx.Node, classID string, line int) {
 			}
 
 			if base != "" {
-				x.B.AddEdge(classID, x.EnsureNamed(base), "inherits", line)
+				e := x.B.AddEdge(classID, x.EnsureNamed(base), "inherits", line)
+				rubyInheritsMeta(x, e, strings.TrimSpace(s.Text()), x.LexicalScopes)
 			}
 
 			break
@@ -673,6 +674,16 @@ var rubyConfig = &generic.Config{
 	SanitizeName:     rubySanitize,
 	ClassHook:        rubyClassHook,
 	CallName:         rubyCallName,
+	DecorateRawCall:  rubyDecorateRawCall,
+	PreScan:          rubyPreScan,
+	ClassMeta:        rubyClassMeta,
+	ExtraWalk:        rubyExtraWalk,
+	FunctionHook:     func(x *generic.Ctx, n *tsx.Node, funcID string, _ int) { rubyMethodKind(x, n, funcID) },
+	QualifyClassName: func(x *generic.Ctx, name string) (string, []string) {
+		segs := strings.Split(name, "::")
+
+		return strings.Join(append(append([]string{}, x.ClassScope...), segs...), "::"), segs
+	},
 }
 
 // ExtractRuby extracts a Ruby file.
@@ -1014,12 +1025,48 @@ func swiftFunctionHook(x *generic.Ctx, n *tsx.Node, funcID string, line int) {
 		var refs []typeRef
 		swiftTypeRefs(swiftParamType(p), false, &refs)
 		emitRefs(x, funcID, line, refs, "parameter_type")
+
+		for _, r := range refs {
+			if r.role == "type" {
+				if nn := p.ChildOfType("simple_identifier"); nn != nil {
+					swiftTablesOf(x).table[nn.Text()] = r.name
+				}
+
+				break
+			}
+		}
 	}
 
 	if rt := swiftReturnType(n); rt != nil {
 		var refs []typeRef
 		swiftTypeRefs(rt, false, &refs)
-		emitRefs(x, funcID, line, refs, "return_type")
+
+		types := 0
+
+		for _, r := range refs {
+			if r.role == "type" {
+				types++
+			}
+		}
+
+		plain := rt.Type() == "user_type" && types == 1
+
+		for _, r := range refs {
+			ctx := "return_type"
+			if r.role == "generic_arg" {
+				ctx = "generic_arg"
+			}
+
+			tgt := x.EnsureNamed(r.name)
+			if tgt == funcID {
+				continue
+			}
+
+			e := x.B.AddEdgeCtx(funcID, tgt, "references", line, ctx)
+			if plain && r.role == "type" {
+				e.Metadata = map[string]any{"swift_plain_return": true}
+			}
+		}
 	}
 }
 
@@ -1061,6 +1108,7 @@ func swiftExtraWalk(x *generic.Ctx, n *tsx.Node, parentClass string) bool {
 		return true
 	case "property_declaration":
 		line := n.Line()
+		annotated := ""
 
 		if ta := n.ChildOfType("type_annotation"); ta != nil {
 			var refs []typeRef
@@ -1073,8 +1121,14 @@ func swiftExtraWalk(x *generic.Ctx, n *tsx.Node, parentClass string) bool {
 				}
 
 				x.Ref(parentClass, x.EnsureNamed(r.name), line, ctx)
+
+				if annotated == "" && r.role == "type" {
+					annotated = r.name
+				}
 			}
 		}
+
+		swiftRecordProperty(x, n, annotated)
 
 		for _, c := range n.Children() {
 			if x.Cfg.CallTypes.Has(c.Type()) {
@@ -1177,12 +1231,14 @@ var swiftConfig = &generic.Config{
 	BodyFallback: []string{"class_body", "protocol_body", "function_body", "enum_class_body"},
 	FunctionBoundary: base.NewSet("function_declaration", "protocol_function_declaration", "init_declaration",
 		"deinit_declaration", "subscript_declaration"),
-	ImportHandler: swiftImport,
-	ClassHook:     swiftClassHook,
-	FunctionHook:  swiftFunctionHook,
-	ExtraWalk:     swiftExtraWalk,
-	CallName:      swiftCallName,
-	PreScan:       swiftPreScan,
+	ImportHandler:   swiftImport,
+	ClassHook:       swiftClassHook,
+	FunctionHook:    swiftFunctionHook,
+	ExtraWalk:       swiftExtraWalk,
+	CallName:        swiftCallName,
+	PreScan:         swiftPreScan,
+	PostProcess:     swiftPostProcess,
+	DecorateRawCall: swiftDecorateRawCall,
 }
 
 // ExtractSwift extracts a Swift file.

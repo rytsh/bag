@@ -3,6 +3,7 @@ package langs
 import (
 	"strings"
 
+	"github.com/rytsh/bag/internal/extract"
 	"github.com/rytsh/bag/internal/extract/base"
 	"github.com/rytsh/bag/internal/extract/tsx"
 	"github.com/rytsh/bag/internal/ids"
@@ -151,7 +152,9 @@ func ExtractElixir(path, _ string, src []byte) *model.Extraction {
 			}
 
 			id := ids.MakeID(b.Stem, name)
-			b.AddNode(id, name, line)
+			if mn := b.AddNode(id, name, line); parent == "" {
+				mn.TopModule = true
+			}
 
 			if kw == "defmodule" {
 				b.AddEdge(b.FileID, id, "contains", line)
@@ -238,7 +241,7 @@ func ExtractElixir(path, _ string, src []byte) *model.Extraction {
 			}
 
 			if do != nil {
-				bodies = append(bodies, rustBody{fid, do})
+				bodies = append(bodies, rustBody{id: fid, node: do})
 			}
 
 			return
@@ -330,4 +333,47 @@ func ExtractElixir(path, _ string, src []byte) *model.Extraction {
 
 	// Graphify drops non-import edges to unknown targets but keeps imports.
 	return res
+}
+
+// resolveElixirImportTargets rewrites alias/import/require/use edges whose
+// bare module id matches exactly one top-level module in another file.
+//
+// Adapted from Graphify's _resolve_elixir_import_targets (Apache-2.0).
+func resolveElixirImportTargets(_ string, nodesP *[]*model.Node, edgesP *[]*model.Edge, _ []extract.FileResult) {
+	byID := map[string]*model.Node{}
+	mods := map[string][]string{}
+
+	for _, n := range *nodesP {
+		byID[n.ID] = n
+		if n.TopModule && n.Label != "" {
+			k := ids.MakeID(n.Label)
+			mods[k] = append(mods[k], n.ID)
+		}
+	}
+
+	if len(mods) == 0 {
+		return
+	}
+
+	for _, e := range *edgesP {
+		if e.Relation != "imports" || e.Context != "import" ||
+			!(strings.HasSuffix(e.SourceFile, ".ex") || strings.HasSuffix(e.SourceFile, ".exs")) {
+			continue
+		}
+
+		if _, ok := byID[e.Target]; ok {
+			continue
+		}
+
+		c := mods[e.Target]
+		if len(c) != 1 {
+			continue
+		}
+
+		if t := byID[c[0]]; t != nil && t.SourceFile == e.SourceFile {
+			continue
+		}
+
+		e.Target = c[0]
+	}
 }
