@@ -51,6 +51,15 @@ func TestBuildLibraryCustomOutDir(t *testing.T) {
 	}
 }
 
+func TestBuildLibraryHonorsCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := bag.Build(ctx, t.TempDir(), bag.BuildOptions{}); err == nil {
+		t.Fatal("Build succeeded with a canceled context")
+	}
+}
+
 func TestMergeGraphsLibrary(t *testing.T) {
 	root := t.TempDir()
 	alpha := writeGraph(t, root, "alpha", map[string]any{

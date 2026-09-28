@@ -65,6 +65,10 @@ type BuildResult struct {
 // Build extracts root and writes a Graphify-compatible graph.json. It performs
 // no LLM or network calls.
 func Build(ctx context.Context, root string, opt BuildOptions) (*BuildResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	root, err := filepath.Abs(root)
 	if err != nil {
 		return nil, fmt.Errorf("resolve root; %w", err)
