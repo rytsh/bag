@@ -105,8 +105,16 @@ changes.
 
 ## Configuration
 
-Config is loaded with [chu](https://github.com/rakunlabs/chu) from
-`bag.{yaml,toml,json}` and `BAG_*` environment variables:
+Config is loaded with [chu](https://github.com/rakunlabs/chu). The first
+matching `bag.{toml,yaml,yml,json}` is used in this order:
+
+1. current directory
+2. `os.UserConfigDir()/bag` (`~/.config/bag` on typical Linux systems)
+3. `/etc/bag`
+4. `/etc`
+
+`CONFIG_FILE_BAG` or `CONFIG_FILE` selects an explicit file instead. `BAG_*`
+environment variables are applied last and override file values.
 
 | Env | Default | Purpose |
 | --- | --- | --- |

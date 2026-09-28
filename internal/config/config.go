@@ -5,10 +5,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 
 	"github.com/rakunlabs/chu"
 	"github.com/rakunlabs/chu/loader"
 	"github.com/rakunlabs/chu/loader/loaderenv"
+	"github.com/rakunlabs/chu/loader/loaderfile"
 	"github.com/rakunlabs/logi"
 	"github.com/rakunlabs/logi/logadapter"
 )
@@ -67,11 +70,14 @@ type Server struct {
 	Path   string `cfg:"path" default:"/mcp"`
 }
 
-// Load loads configuration from defaults, bag.{yaml,toml,json}, and BAG_*
-// environment variables.
+// Load loads configuration from defaults, the first matching configuration
+// file, and BAG_* environment variables. File lookup order is the current
+// directory, os.UserConfigDir()/bag, /etc/bag, then /etc. CONFIG_FILE_BAG or
+// CONFIG_FILE selects an explicit file before this lookup.
 func Load(ctx context.Context) (*Config, error) {
 	var cfg Config
 	if err := chu.Load(ctx, ServiceName, &cfg,
+		chu.WithLoaderOption(loaderfile.New(loaderfile.WithFolders(configFolders()...))),
 		chu.WithLoaderOption(loaderenv.New(loaderenv.WithPrefix("BAG_"))),
 		chu.WithDisableLoader(loader.NameHTTP),
 		chu.WithLogger(logadapter.Noop{}),
@@ -86,6 +92,17 @@ func Load(ctx context.Context) (*Config, error) {
 	slog.Debug("loaded configuration", "config", chu.MarshalMap(cfg))
 
 	return &cfg, nil
+}
+
+func configFolders() []string {
+	folders := make([]string, 0, 3)
+	if dir, err := os.UserConfigDir(); err == nil && dir != "" {
+		folders = append(folders, filepath.Join(dir, ServiceName))
+	}
+
+	// Keep /etc/bag as the conventional app directory and /etc itself for
+	// compatibility with chu's previous /etc/bag.yaml lookup.
+	return append(folders, filepath.Join(string(filepath.Separator), "etc", ServiceName), filepath.Join(string(filepath.Separator), "etc"))
 }
 
 type ctxKey struct{}
