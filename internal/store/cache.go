@@ -11,9 +11,10 @@ import (
 	"github.com/rytsh/bag/internal/model"
 )
 
-// cacheVersion is bumped whenever extractor output changes shape so stale
-// entries are ignored.
-const cacheVersion = "bag-ast-v5"
+// ASTVersion is bumped whenever extractor output changes shape so stale
+// entries are ignored. It also identifies the linked extraction engine to
+// library consumers.
+const ASTVersion = "bag-ast-v5"
 
 // Cache is a content-addressed per-file AST extraction cache.
 type Cache struct {
@@ -31,7 +32,7 @@ func OpenCache(dir string) (*Cache, error) {
 
 func (c *Cache) key(path string, src []byte) string {
 	h := sha256.New()
-	h.Write([]byte(cacheVersion))
+	h.Write([]byte(ASTVersion))
 	h.Write([]byte{0})
 	h.Write([]byte(path))
 	h.Write([]byte{0})

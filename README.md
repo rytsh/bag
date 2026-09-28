@@ -68,6 +68,28 @@ graphify-out/
 | `install --platform agents\|claude\|opencode\|cursor\|all` | Tell your assistant to use the graph |
 | `languages` | Supported languages and extensions |
 
+## Go library
+
+Go services can embed the AST pipeline directly, without invoking the `bag` or
+Graphify CLI:
+
+```go
+result, err := bag.Build(ctx, repoPath, bag.BuildOptions{
+    Excludes: []string{"testdata/", "vendor/"},
+    Force:    true,
+})
+
+merged, err := bag.MergeGraphs(ctx, mergedPath, graphPaths...)
+```
+
+Import `github.com/rytsh/bag`. `Build` writes the standard
+`graphify-out/{graph.json,GRAPH_REPORT.md,graph.html}` layout and performs no
+network or LLM calls. `MergeGraphs` applies Graphify-compatible repo prefixes,
+community offsets, global external stubs, shared-type links and parked
+cross-repository call resolution. Persist `bag.EngineVersion` beside validated
+graphs if the host application needs to invalidate outputs after an extractor
+upgrade.
+
 ## MCP
 
 ```sh
