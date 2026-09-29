@@ -1,0 +1,47 @@
+name: Test
+
+on: [push]
+
+jobs:
+  sonarcloud:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get repository name
+        run: echo "REPOSITORY_NAME=${GITHUB_REPOSITORY#*/}" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v7
+        with:
+          # Full history improves SonarQube analysis and is needed by --new-from-rev.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          args: --timeout=5m --new-from-rev=HEAD~1 --issues-exit-code=0
+
+      - name: Run tests
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          golangci-lint run --output.checkstyle.path=golangci-lint-report.out --issues-exit-code=0 ./...
+          go test -coverprofile=coverage.out -json ./... > test-report.out
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@v8
+        with:
+          args: >
+            -Dsonar.organization=${{ github.repository_owner }}
+            -Dsonar.projectKey=${{ github.repository_owner }}_${{ env.REPOSITORY_NAME }}
+            -Dsonar.go.coverage.reportPaths=coverage.out
+            -Dsonar.go.tests.reportPaths=test-report.out
+            -Dsonar.go.golangci-lint.reportPaths=golangci-lint-report.out
+            -Dsonar.sources=.
+            -Dsonar.exclusions=**/vendor/**,**/*_test.go,**/testdata/**,scripts/**
+            -Dsonar.tests=.
+            -Dsonar.test.inclusions=**/*_test.go
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

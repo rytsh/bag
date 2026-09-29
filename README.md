@@ -1,5 +1,8 @@
 # bag
 
+[![License](https://img.shields.io/github/license/rytsh/bag?color=blue&style=flat-square)](https://raw.githubusercontent.com/rytsh/bag/main/LICENSE)
+[![Coverage](https://img.shields.io/sonar/coverage/rytsh_bag?logo=sonarcloud&server=https%3A%2F%2Fsonarcloud.io&style=flat-square)](https://sonarcloud.io/summary/overall?id=rytsh_bag)
+
 `bag` turns a codebase (plus its docs, papers and images) into a **knowledge
 graph** you can query instead of grepping. It is a pure-Go reimplementation of
 [Graphify](https://github.com/Graphify-Labs/graphify): same `graph.json` schema,
