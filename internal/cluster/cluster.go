@@ -73,7 +73,7 @@ func Cluster(g *graph.Graph, opt Options) graph.Communities {
 		}
 	}
 
-	var isolates, connected []string
+	var isolates, connected, stranded []string
 
 	for _, n := range ids {
 		if hubs[n] {
@@ -83,6 +83,26 @@ func Cluster(g *graph.Graph, opt Options) graph.Communities {
 		if g.Degree(n) == 0 {
 			isolates = append(isolates, n)
 		} else {
+			// Adapted from Graphify's cluster (Apache-2.0): neighbours
+			// stranded by hub exclusion follow their hubs, not singleton
+			// communities. Self-loops are not neighbours for this test.
+			if len(hubs) > 0 {
+				onlyHubs, hasNeighbour := true, false
+				for _, nb := range g.Neighbors(n) {
+					if nb == n {
+						continue
+					}
+					hasNeighbour = true
+					if !hubs[nb] {
+						onlyHubs = false
+						break
+					}
+				}
+				if hasNeighbour && onlyHubs {
+					stranded = append(stranded, n)
+					continue
+				}
+			}
 			connected = append(connected, n)
 		}
 	}
@@ -150,6 +170,22 @@ func Cluster(g *graph.Graph, opt Options) graph.Communities {
 
 			raw[best] = append(raw[best], h)
 			nc[h] = best
+		}
+		for _, n := range stranded {
+			votes := map[int]int{}
+			for _, nb := range g.Neighbors(n) {
+				if nb != n {
+					votes[nc[nb]]++
+				}
+			}
+			best, bestV := -1, -1
+			for c, v := range votes {
+				if v > bestV || (v == bestV && c < best) {
+					best, bestV = c, v
+				}
+			}
+			raw[best] = append(raw[best], n)
+			nc[n] = best
 		}
 	}
 

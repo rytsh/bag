@@ -64,6 +64,20 @@ func ExtractZig(path, _ string, src []byte) *model.Extraction {
 
 	var walk func(n *tsx.Node, parent string)
 	walk = func(n *tsx.Node, parent string) {
+		// Adapted from Graphify's extract_zig (Apache-2.0). Only enum
+		// fields are members; struct/union fields retain their old behaviour.
+		if n.Type() == "container_field" && parent != "" && n.Parent() != nil && n.Parent().Type() == "enum_declaration" {
+			nn := n.Field("name")
+			if nn == nil {
+				nn = n.ChildOfType("identifier")
+			}
+			if nn != nil && nn.Text() != "" {
+				id := ids.MakeID(parent, nn.Text())
+				b.AddNode(id, nn.Text(), n.Line())
+				b.AddEdge(parent, id, "case_of", n.Line())
+			}
+			return
+		}
 		switch n.Type() {
 		case "function_declaration":
 			nn := n.Field("name")

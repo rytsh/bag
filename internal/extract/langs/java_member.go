@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/rytsh/bag/internal/extract"
+	"github.com/rytsh/bag/internal/extract/base"
 	"github.com/rytsh/bag/internal/extract/generic"
 	"github.com/rytsh/bag/internal/extract/tsx"
 	"github.com/rytsh/bag/internal/model"
@@ -408,6 +409,47 @@ func resolveJavaMemberCalls(_ string, nodesP *[]*model.Node, edgesP *[]*model.Ed
 
 	classFields := bindFieldTables(nodes, per)
 
+	// Adapted from Graphify's _resolve_java_member_calls (Apache-2.0).
+	jvmBases := func(typeID string) ([]string, bool) {
+		parents := bases[typeID]
+		for _, parent := range parents {
+			n := byID[parent]
+			if parent == typeID || n == nil || base.LangFamily(n.SourceFile) != "jvm" {
+				return nil, false
+			}
+		}
+		return parents, true
+	}
+	methodOnTypeOrBases := func(typeID, callee string) string {
+		hits, seen := map[string]bool{}, map[string]bool{}
+		frontier := []string{typeID}
+		for len(frontier) > 0 {
+			n := frontier[len(frontier)-1]
+			frontier = frontier[:len(frontier)-1]
+			if seen[n] {
+				continue
+			}
+			seen[n] = true
+			if declared := methods[[2]string{n, callee}]; len(declared) > 0 {
+				for id := range declared {
+					hits[id] = true
+				}
+				continue
+			}
+			parents, ok := jvmBases(n)
+			if !ok {
+				return ""
+			}
+			frontier = append(frontier, parents...)
+		}
+		if len(hits) == 1 {
+			for id := range hits {
+				return id
+			}
+		}
+		return ""
+	}
+
 	inheritedField := func(classID, field string) string {
 		seen := map[string]bool{}
 		queue := []string{classID}
@@ -454,6 +496,12 @@ func resolveJavaMemberCalls(_ string, nodesP *[]*model.Node, edgesP *[]*model.Ed
 			}
 
 			exact = true
+		} else if recv == "super" {
+			parents, ok := jvmBases(enclosing[caller])
+			if !ok || len(parents) != 1 {
+				continue
+			}
+			typeID, exact = parents[0], true
 		} else {
 			typeName := rc.ReceiverType
 			if typeName == "" && upperStart(recv) {
@@ -482,17 +530,8 @@ func resolveJavaMemberCalls(_ string, nodesP *[]*model.Node, edgesP *[]*model.Ed
 			typeID = defs[0]
 		}
 
-		ms := methods[[2]string{typeID, key(callee)}]
-		if len(ms) != 1 {
-			continue
-		}
-
-		var target string
-		for m := range ms {
-			target = m
-		}
-
-		if target == caller || existing[[2]string{caller, target}] {
+		target := methodOnTypeOrBases(typeID, key(callee))
+		if target == "" || target == caller || existing[[2]string{caller, target}] {
 			continue
 		}
 

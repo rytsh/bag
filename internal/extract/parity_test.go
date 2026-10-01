@@ -40,6 +40,12 @@ func TestGraphifyResolveParity(t *testing.T) {
 	checkParity(t, "../../testdata/resolve", "../../testdata/graphify_resolve_golden.json", nil, true)
 }
 
+// TestGraphifyUpstreamParity covers Graphify 0.9.73's enums, Java inheritance,
+// imported Python modules containing nested symbols and inferred Kotlin fields.
+func TestGraphifyUpstreamParity(t *testing.T) {
+	checkParity(t, "../../testdata/upstream", "../../testdata/graphify_upstream_golden.json", nil, true)
+}
+
 func checkParity(t *testing.T, dir, goldenPath string, skip func(string) bool, exact bool) {
 	t.Helper()
 

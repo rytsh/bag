@@ -545,8 +545,8 @@ func javaCallName(_ *generic.Ctx, n *tsx.Node) (string, bool, string) {
 	switch recv.Type() {
 	case "identifier":
 		return callee, true, recv.Text()
-	case "this":
-		return callee, true, "this"
+	case "this", "super":
+		return callee, true, recv.Type()
 	case "field_access":
 		o, f := recv.Field("object"), recv.Field("field")
 		if o != nil && o.Type() == "this" && f != nil {

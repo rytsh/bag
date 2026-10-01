@@ -449,9 +449,10 @@ func ktExtraWalk(x *generic.Ctx, n *tsx.Node, parentClass string) bool {
 
 				x.Ref(parentClass, x.EnsureNamed(r.name), n.Line(), ctx)
 			}
-
-			ktEmitAnnotations(x, n, parentClass, n.Line())
 		}
+		// Adapted from Graphify's _extract_generic Kotlin property branch
+		// (Apache-2.0): annotations also apply to inferred-type properties.
+		ktEmitAnnotations(x, n, parentClass, n.Line())
 
 		owner := parentClass
 		sawEq := false

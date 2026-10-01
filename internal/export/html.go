@@ -57,6 +57,7 @@ type visNode struct {
 	SourceFile    string         `json:"source_file"`
 	FileType      string         `json:"file_type"`
 	Degree        int            `json:"degree"`
+	MemberCount   *int           `json:"member_count,omitempty"`
 }
 
 type visEdge struct {
@@ -175,6 +176,10 @@ func ToHTML(g *graph.Graph, c graph.Communities, outPath string, opt HTMLOptions
 			Title: lbl, Community: cid, CommunityName: SanitizeLabel(label(cid)),
 			SourceFile: SanitizeLabel(n.SourceFile), FileType: n.FileType, Degree: deg,
 		})
+		if opt.MemberCounts != nil {
+			count := opt.MemberCounts[cid]
+			nodes[len(nodes)-1].MemberCount = &count
+		}
 	}
 
 	edges := make([]visEdge, 0)

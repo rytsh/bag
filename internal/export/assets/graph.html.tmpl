@@ -87,6 +87,7 @@ const nodesDS = new vis.DataSet(RAW_NODES.map((n, i) => ({
   y: 30 * Math.sqrt(i) * Math.sin(i * 2.4),
   _community: n.community, _community_name: n.community_name,
   _source_file: n.source_file, _file_type: n.file_type, _degree: n.degree,
+  _member_count: n.member_count,
 })));
 
 const edgesDS = new vis.DataSet(RAW_EDGES.map((e, i) => ({
@@ -143,6 +144,7 @@ function showInfo(nodeId) {
     <div class="field">Type: ${esc(n._file_type || 'unknown')}</div>
     <div class="field">Community: ${esc(n._community_name)}</div>
     <div class="field">Source: ${esc(n._source_file || '-')}</div>
+    ${n._member_count !== undefined && n._member_count !== null ? `<div class="field">Members: ${esc(n._member_count)}</div>` : ''}
     <div class="field">Degree: ${n._degree}</div>
     ${neighborIds.length ? `<div class="field" style="margin-top:8px;color:#aaa;font-size:11px">Neighbors (${neighborIds.length})</div><div id="neighbors-list">${neighborItems}</div>` : ''}
   `;

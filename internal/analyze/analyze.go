@@ -219,12 +219,17 @@ func fileCategory(p string) string {
 	return "doc"
 }
 
+// topLevelDir is adapted from Graphify's _top_level_dir (Apache-2.0).
 func topLevelDir(p string) string {
+	p = strings.ReplaceAll(p, "\\", "/")
+	for strings.HasPrefix(p, "./") {
+		p = strings.TrimPrefix(p, "./")
+	}
 	if i := strings.IndexByte(p, '/'); i >= 0 {
 		return p[:i]
 	}
 
-	return p
+	return "."
 }
 
 var structural = base.NewSet("imports", "imports_from", "contains", "method")
@@ -263,7 +268,7 @@ func surpriseScore(g *graph.Graph, e *model.Edge, nc map[string]int) (int, []str
 		reasons = append(reasons, fmt.Sprintf("crosses file types (%s ↔ %s)", cu, cv))
 	}
 
-	if topLevelDir(us) != topLevelDir(vs) && !suppress {
+	if (fmt.Sprint(g.Node(u).Extra["repo"]) != fmt.Sprint(g.Node(v).Extra["repo"]) || topLevelDir(us) != topLevelDir(vs)) && !suppress {
 		score += 2
 		reasons = append(reasons, "connects across different repos/directories")
 	}

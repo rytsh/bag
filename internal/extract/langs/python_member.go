@@ -169,6 +169,9 @@ func resolvePythonMemberCalls(_ string, nodesP *[]*model.Node, edgesP *[]*model.
 		var mods []string
 
 		for t := range imported[callerFile] {
+			if _, contained := fileOf[t]; contained {
+				continue
+			}
 			if _, ok := children[t]; ok && (moduleStemKey(t) == rkey || aliases[t] == rkey) {
 				mods = append(mods, t)
 			}

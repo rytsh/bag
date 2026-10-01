@@ -221,6 +221,21 @@ func cppClassHook(x *generic.Ctx, n *tsx.Node, classID string, line int) {
 }
 
 func cppExtraWalk(x *generic.Ctx, n *tsx.Node, parentClass string) bool {
+	// Adapted from Graphify's _cpp_extra_walk (Apache-2.0).
+	if n.Type() == "enumerator" && parentClass != "" {
+		nn := n.Field("name")
+		if nn == nil {
+			nn = n.ChildOfType("identifier")
+		}
+		if nn != nil && nn.Text() != "" {
+			id := ids.MakeID(parentClass, nn.Text())
+			if x.B.Get(id) == nil {
+				x.B.AddNode(id, nn.Text(), n.Line())
+				x.B.AddEdge(parentClass, id, "case_of", n.Line())
+			}
+		}
+		return true
+	}
 	if n.Type() != "field_declaration" || parentClass == "" {
 		return false
 	}
@@ -338,7 +353,7 @@ var cConfig = &generic.Config{
 var cppConfig = &generic.Config{
 	Lang:                "cpp",
 	Grammar:             "cpp",
-	ClassTypes:          base.NewSet("class_specifier", "struct_specifier"),
+	ClassTypes:          base.NewSet("class_specifier", "struct_specifier", "enum_specifier"),
 	FunctionTypes:       base.NewSet("function_definition"),
 	ImportTypes:         base.NewSet("preproc_include"),
 	CallTypes:           base.NewSet("call_expression"),

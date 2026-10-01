@@ -319,7 +319,8 @@ func ToWiki(in WikiInput, outDir string) (int, error) {
 	}
 
 	nc := comms.NodeCommunity()
-	used := map[string]bool{}
+	// Adapted from Graphify's to_wiki (Apache-2.0): reserve the catalog.
+	used := map[string]bool{"index": true}
 	unique := func(b string) string {
 		s := b
 		for n := 2; used[strings.ToLower(s)]; n++ {
@@ -331,7 +332,7 @@ func ToWiki(in WikiInput, outDir string) (int, error) {
 		return s
 	}
 
-	resolver := map[string]string{"index": "index"}
+	resolver := map[string]string{}
 	cids := make([]int, 0, len(comms))
 
 	for cid := range comms {
@@ -535,7 +536,7 @@ func communityArticle(g *graph.Graph, cid int, nodes []string, label func(int) s
 		L = append(L, fmt.Sprintf("- %s: %d (%d%%)", c, conf[c], int(float64(conf[c])/float64(totalE)*100+0.5)))
 	}
 
-	L = append(L, "", "---", "", fmt.Sprintf("*Part of the bag knowledge wiki. See %s to navigate.*", mdLink("index", resolver)))
+	L = append(L, "", "---", "", "*Part of the bag knowledge wiki. See [index](index.md) to navigate.*")
 
 	return strings.Join(L, "\n")
 }
@@ -586,7 +587,7 @@ func godArticle(g *graph.Graph, id string, label func(int) string, nc map[string
 		L = append(L, "")
 	}
 
-	L = append(L, "---", "", fmt.Sprintf("*Part of the bag knowledge wiki. See %s to navigate.*", mdLink("index", resolver)))
+	L = append(L, "---", "", "*Part of the bag knowledge wiki. See [index](index.md) to navigate.*")
 
 	return strings.Join(L, "\n")
 }

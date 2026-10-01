@@ -340,6 +340,12 @@ func ExtractRust(path, _ string, src []byte) *model.Extraction {
 						if v.Type() != "enum_variant" {
 							continue
 						}
+						// Adapted from Graphify's extract_rust (Apache-2.0).
+						if nn := v.ChildOfType("identifier"); nn != nil && nn.Text() != "" {
+							variant := ids.MakeID(item, nn.Text())
+							b.AddNode(variant, nn.Text(), v.Line())
+							b.AddEdge(item, variant, "case_of", v.Line())
+						}
 
 						for _, vc := range v.Children() {
 							switch vc.Type() {

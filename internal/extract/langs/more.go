@@ -164,6 +164,21 @@ func scalaExtraWalk(x *generic.Ctx, n *tsx.Node, parentClass string) bool {
 	}
 
 	switch n.Type() {
+	case "enum_case_definitions":
+		// Adapted from Graphify's _scala_extra_walk (Apache-2.0).
+		for _, c := range n.Children() {
+			if c.Type() != "simple_enum_case" && c.Type() != "full_enum_case" {
+				continue
+			}
+			if nn := c.ChildOfType("identifier"); nn != nil && nn.Text() != "" {
+				id := ids.MakeID(parentClass, nn.Text())
+				if x.B.Get(id) == nil {
+					x.B.AddNode(id, nn.Text(), c.Line())
+					x.B.AddEdge(parentClass, id, "case_of", c.Line())
+				}
+			}
+		}
+		return true
 	case "val_definition", "var_definition":
 		var refs []typeRef
 		scalaTypeRefs(n.Field("type"), false, &refs)
@@ -225,14 +240,14 @@ func scalaCallName(_ *generic.Ctx, n *tsx.Node) (string, bool, string) {
 var scalaConfig = &generic.Config{
 	Lang:              "scala",
 	Grammar:           "scala",
-	ClassTypes:        base.NewSet("class_definition", "object_definition", "trait_definition"),
+	ClassTypes:        base.NewSet("class_definition", "object_definition", "trait_definition", "enum_definition"),
 	FunctionTypes:     base.NewSet("function_definition"),
 	ImportTypes:       base.NewSet("import_declaration"),
 	CallTypes:         base.NewSet("call_expression"),
 	CallAccessorTypes: base.NewSet("field_expression"),
 	CallAccessorField: "field",
 	NameFallback:      []string{"identifier"},
-	BodyFallback:      []string{"template_body"},
+	BodyFallback:      []string{"template_body", "enum_body"},
 	FunctionBoundary:  base.NewSet("function_definition"),
 	ImportHandler:     scalaImport,
 	ClassHook:         scalaClassHook,
