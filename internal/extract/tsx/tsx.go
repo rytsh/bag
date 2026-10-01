@@ -38,6 +38,14 @@ func Language(name string) (*ts.Language, error) {
 	if l, ok := langCache[name]; ok {
 		return l, nil
 	}
+	if name == "vbnet" {
+		l, err := ts.LoadLanguage(vbnetGrammar)
+		if err != nil {
+			return nil, fmt.Errorf("load vbnet grammar; %w", err)
+		}
+		langCache[name] = l
+		return l, nil
+	}
 
 	entry := grammars.DetectLanguageByName(name)
 	if entry == nil {

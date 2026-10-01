@@ -4,18 +4,21 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 )
 
 func TestConfigFileLookupPrefersLocalThenUserConfig(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("XDG_CONFIG_HOME is Unix-specific")
-	}
-
 	root := t.TempDir()
-	userRoot := filepath.Join(t.TempDir(), "config")
-	t.Setenv("XDG_CONFIG_HOME", userRoot)
+	home := t.TempDir()
+	// UserConfigDir uses HOME on macOS, XDG_CONFIG_HOME on Linux and
+	// APPDATA on Windows. Isolate all of them from the user's real config.
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+	userRoot, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("CONFIG_FILE", "")
 	t.Setenv("CONFIG_FILE_BAG", "")
 	oldOut, hadOut := os.LookupEnv("BAG_OUT_DIR")

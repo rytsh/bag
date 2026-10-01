@@ -14,7 +14,12 @@ import (
 // ASTVersion is bumped whenever extractor output changes shape so stale
 // entries are ignored. It also identifies the linked extraction engine to
 // library consumers.
-const ASTVersion = "bag-ast-v6"
+const ASTVersion = "bag-ast-v7"
+
+func init() {
+	// VB.NET callable metadata retains every accepted optional-argument arity.
+	gob.Register([]int{})
+}
 
 // Cache is a content-addressed per-file AST extraction cache.
 type Cache struct {

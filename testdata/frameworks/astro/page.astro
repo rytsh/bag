@@ -1,0 +1,13 @@
+---
+import { helper } from './util';
+import Card from './Card.astro';
+interface Props { title: string }
+function setup(title: string): string { return helper(title); }
+const title = setup('Merhaba');
+---
+<html><body><Card title={title} /><p>şablon 🪢</p>
+{import('./lazy')}
+<script type="application/ld+json">{"@type":"Thing"}</script>
+<script data-test="a>b">function client() { console.log('hello'); }</script>
+<script>const first = () => client()</script><script>const second = () => first()</script>
+</body></html>

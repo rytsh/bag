@@ -17,6 +17,9 @@ func init() {
 	reg("javascript", ExtractJS, ".js", ".jsx", ".mjs", ".cjs")
 	reg("typescript", ExtractTS, ".ts", ".mts", ".cts")
 	reg("tsx", ExtractTSX, ".tsx")
+	reg("astro", ExtractAstro, ".astro")
+	reg("solidity", ExtractSolidity, ".sol")
+	reg("vbnet", ExtractVBNet, ".vb")
 	reg("c", ExtractC, ".c")
 	reg("c-header", ExtractHeader, ".h")
 	reg("cpp", ExtractCPP, ".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx", ".cu", ".cuh", ".metal")
@@ -45,6 +48,7 @@ func init() {
 
 	extract.RegisterTypeResolver(resolvePHPTypeReferences)
 	extract.RegisterTypeResolver(resolveJavaTypeReferences)
+	extract.RegisterTypeResolver(resolveSolidityTypeReferences)
 	extract.RegisterPreRewireResolver(resolvePythonCrossFileImports)
 	extract.RegisterSymbolResolver(guardAmbiguousPythonImports)
 	extract.RegisterSymbolResolver(resolvePythonSymbols)
@@ -65,4 +69,5 @@ func init() {
 	extract.RegisterResolver(resolveKotlinQualifiedCalls)
 	extract.RegisterResolver(resolveCSharpQualifiedCalls)
 	extract.RegisterResolver(resolveCSharpInterfaceDispatch)
+	extract.RegisterResolver(resolveVBNetPartialCalls)
 }

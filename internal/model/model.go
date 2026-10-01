@@ -131,6 +131,9 @@ type RawCall struct {
 	// QualifiedPrefix is the namespace/package written before a qualified
 	// callee (`new A.B.Cache()`, `com.pkg.fn()`).
 	QualifiedPrefix string
+	// Owner/Arity identify VB.NET partial-type calls (including optional args).
+	Owner string
+	Arity int
 }
 
 // Hyperedge groups several nodes under one relation.

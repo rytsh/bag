@@ -46,6 +46,11 @@ func TestGraphifyUpstreamParity(t *testing.T) {
 	checkParity(t, "../../testdata/upstream", "../../testdata/graphify_upstream_golden.json", nil, true)
 }
 
+// TestGraphifyFrameworkParity covers Astro, Solidity and VB.NET 0.9.73 output.
+func TestGraphifyFrameworkParity(t *testing.T) {
+	checkParity(t, "../../testdata/frameworks", "../../testdata/graphify_frameworks_golden.json", nil, true)
+}
+
 func checkParity(t *testing.T, dir, goldenPath string, skip func(string) bool, exact bool) {
 	t.Helper()
 

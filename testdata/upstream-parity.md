@@ -42,5 +42,5 @@ Path("testdata/graphify_upstream_golden.json").write_text(
 
 This is a targeted extraction parity test, not a claim of full Graphify
 0.9.73 feature parity. Astro extraction, Solidity free functions and VB.NET
-qualified calls still need dedicated extractor support in bag. Python/agent
-installation changes and database push changes are outside this port.
+qualified calls are covered separately by `graphify_frameworks_golden.json`.
+Python/agent installation changes and database push changes are outside this port.

@@ -5,8 +5,6 @@ COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo -)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)
 
-GO_PKGS := $(shell go list ./... | grep -v /testdata/)
-
 .DEFAULT_GOAL := help
 
 .PHONY: build
@@ -19,11 +17,11 @@ install: ## Install bag into GOBIN
 
 .PHONY: test
 test: ## Run tests
-	go test -race $(GO_PKGS)
+	go test -race -v -cover ./...
 
 .PHONY: lint
 lint: ## Run vet and gofmt checks
-	go vet $(GO_PKGS)
+	go vet ./...
 	@test -z "$$(gofmt -l cmd internal)" || (gofmt -l cmd internal && exit 1)
 
 .PHONY: parity

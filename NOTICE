@@ -13,3 +13,13 @@ Apache License, Version 2.0:
 Portions of Graphify's extraction pipeline, node-ID normalization, graph
 schema, and analysis logic were reimplemented in Go for this project and
 have been modified from the original Python sources.
+
+This product includes generated parse tables from tree-sitter-vb-dotnet
+(https://github.com/repowise-dev/tree-sitter-vb-dotnet), v0.3.0, licensed
+under the MIT License:
+
+    Copyright (c) 2025 CodeAnt AI
+    Copyright (c) 2026 Repowise contributors
+
+The full license is retained in
+internal/extract/tsx/grammar_blobs/LICENSE.vbnet.

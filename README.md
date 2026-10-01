@@ -21,7 +21,7 @@ two tools.
 - **Many languages.** Dedicated extractors (ported from Graphify, output checked
   against it) for Go, Python, JavaScript, TypeScript/TSX, Java, C, C++, C#,
   Kotlin, Scala, PHP, Ruby, Lua/Luau, Swift, Objective-C, Rust, Zig, Bash,
-  Elixir, Julia and Markdown, plus package manifests (`go.mod`,
+   Elixir, Julia, Astro, Solidity, VB.NET and Markdown, plus package manifests (`go.mod`,
   `pyproject.toml`, `Cargo.toml`, `pom.xml`). About 100 more languages are
   covered through tree-sitter tags queries. Run `bag languages` for the full list.
 
