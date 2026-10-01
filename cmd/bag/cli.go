@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -15,8 +14,6 @@ type command struct {
 	usage string
 	run   func(ctx context.Context, args []string) error
 }
-
-var errUsage = errors.New("usage")
 
 var commands []command
 

@@ -267,7 +267,7 @@ func hasShebang(path string) bool {
 	if err != nil {
 		return false
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	line, _ := bufio.NewReader(f).ReadString('\n')
 
@@ -280,7 +280,7 @@ func FirstLine(path string) string {
 	if err != nil {
 		return ""
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	line, _ := bufio.NewReader(f).ReadString('\n')
 

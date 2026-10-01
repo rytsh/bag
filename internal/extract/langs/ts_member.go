@@ -254,7 +254,9 @@ func resolveTSMemberCalls(_ string, nodesP *[]*model.Node, edgesP *[]*model.Edge
 			typeFile, hasTF := fileOf[typeID]
 			imp := imported[callerFile]
 
-			if !((hasCF && hasTF && callerFile == typeFile) || imp[typeID] || (hasTF && imp[typeFile])) {
+			sameFile := hasCF && hasTF && callerFile == typeFile
+			visible := sameFile || imp[typeID] || (hasTF && imp[typeFile])
+			if !visible {
 				continue
 			}
 

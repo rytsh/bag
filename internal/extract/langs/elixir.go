@@ -356,8 +356,8 @@ func resolveElixirImportTargets(_ string, nodesP *[]*model.Node, edgesP *[]*mode
 	}
 
 	for _, e := range *edgesP {
-		if e.Relation != "imports" || e.Context != "import" ||
-			!(strings.HasSuffix(e.SourceFile, ".ex") || strings.HasSuffix(e.SourceFile, ".exs")) {
+		isElixir := strings.HasSuffix(e.SourceFile, ".ex") || strings.HasSuffix(e.SourceFile, ".exs")
+		if e.Relation != "imports" || e.Context != "import" || !isElixir {
 			continue
 		}
 

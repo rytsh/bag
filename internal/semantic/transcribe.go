@@ -288,7 +288,7 @@ func (t *Transcriber) request(ctx context.Context, path, prompt string) (string,
 	if err != nil {
 		return "", fmt.Errorf("open media; %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var body bytes.Buffer
 

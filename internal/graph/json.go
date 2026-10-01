@@ -241,28 +241,34 @@ func (g *Graph) WriteJSON(path string, opt WriteOptions) error {
 // WriteFileAtomic writes data to path via a temp file + rename.
 func WriteFileAtomic(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
+		return fmt.Errorf("create dir; %w", err)
 	}
 
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
 	if err != nil {
-		return err
+		return fmt.Errorf("create temp file; %w", err)
 	}
 
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmp.Name())
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
 
-		return err
+		return fmt.Errorf("write temp file; %w", err)
 	}
 
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmp.Name())
+		_ = os.Remove(tmp.Name())
 
-		return err
+		return fmt.Errorf("close temp file; %w", err)
 	}
 
-	return os.Rename(tmp.Name(), path)
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		_ = os.Remove(tmp.Name())
+
+		return fmt.Errorf("rename temp file; %w", err)
+	}
+
+	return nil
 }
 
 func stripDiacritics(s string) string {

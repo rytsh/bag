@@ -102,7 +102,7 @@ func runWatch(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	addDirs := func() {
 		_ = filepath.WalkDir(opt.Root, func(p string, d fs.DirEntry, err error) error {

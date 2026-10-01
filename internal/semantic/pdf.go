@@ -32,7 +32,7 @@ func pdfText(path string) (text string, err error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	rd, err := r.GetPlainText()
 	if err != nil {

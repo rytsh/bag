@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	"sync"
 
@@ -199,17 +198,6 @@ func relPath(root, p string) string {
 	}
 
 	return filepath.ToSlash(rel)
-}
-
-func sortedKeys[V any](m map[string]V) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-
-	sort.Strings(out)
-
-	return out
 }
 
 var _ = base.MakeID

@@ -2,12 +2,14 @@
 package store
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/gob"
 	"encoding/hex"
 	"os"
 	"path/filepath"
 
+	"github.com/rytsh/bag/internal/graph"
 	"github.com/rytsh/bag/internal/model"
 )
 
@@ -56,7 +58,7 @@ func (c *Cache) Get(path string, src []byte) (*model.Extraction, bool) {
 	if err != nil {
 		return nil, false
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var ex model.Extraction
 	if err := gob.NewDecoder(f).Decode(&ex); err != nil {
@@ -66,25 +68,12 @@ func (c *Cache) Get(path string, src []byte) (*model.Extraction, bool) {
 	return &ex, true
 }
 
-// Put stores an extraction.
+// Put stores an extraction. Failures are ignored: the cache is best-effort.
 func (c *Cache) Put(path string, src []byte, ex *model.Extraction) {
-	p := c.file(c.key(path, src))
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(ex); err != nil {
 		return
 	}
 
-	tmp, err := os.CreateTemp(filepath.Dir(p), ".tmp-*")
-	if err != nil {
-		return
-	}
-
-	if err := gob.NewEncoder(tmp).Encode(ex); err != nil {
-		tmp.Close()
-		os.Remove(tmp.Name())
-
-		return
-	}
-
-	tmp.Close()
-	_ = os.Rename(tmp.Name(), p)
+	_ = graph.WriteFileAtomic(c.file(c.key(path, src)), buf.Bytes())
 }

@@ -741,37 +741,27 @@ func jsClassHook(x *generic.Ctx, n *tsx.Node, classID string, _ int) {
 	jsDecorators(x, n, classID)
 }
 
-func isIdentLike(s string) bool {
-	for _, r := range s {
-		if !(r == '_' || r == '$' || r == '.' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r > 127) {
-			return false
+// tsDecoratorName returns the decorator's name from its first named child.
+func tsDecoratorName(d *tsx.Node) string {
+	kids := d.NamedChildren()
+	if len(kids) == 0 {
+		return ""
+	}
+
+	t := kids[0]
+	if t.Type() == "call_expression" {
+		if f := t.Field("function"); f != nil {
+			t = f
 		}
 	}
 
-	return s != ""
-}
-
-func tsDecoratorName(d *tsx.Node) string {
-	for _, c := range d.NamedChildren() {
-		t := c
-		if t.Type() == "call_expression" {
-			if f := t.Field("function"); f != nil {
-				t = f
-			}
+	switch t.Type() {
+	case "member_expression":
+		if p := t.Field("property"); p != nil {
+			return p.Text()
 		}
-
-		switch t.Type() {
-		case "member_expression":
-			if p := t.Field("property"); p != nil {
-				return p.Text()
-			}
-
-			return ""
-		case "identifier":
-			return t.Text()
-		}
-
-		return ""
+	case "identifier":
+		return t.Text()
 	}
 
 	return ""

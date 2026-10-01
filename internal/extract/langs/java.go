@@ -232,8 +232,7 @@ func javaAnnotationClassLiterals(decl *tsx.Node) []string {
 }
 
 func javaImport(x *generic.Ctx, n *tsx.Node) [][2]string {
-	var walkScoped func(c *tsx.Node) string
-	walkScoped = func(c *tsx.Node) string {
+	walkScoped := func(c *tsx.Node) string {
 		var parts []string
 
 		for cur := c; cur != nil; {

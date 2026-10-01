@@ -565,6 +565,12 @@ func (x *Ctx) symbolID(plain, name string) string {
 	return plain
 }
 
+// isPyLocalCall reports whether a Python call targets a function-local name;
+// such calls never become raw calls.
+func isPyLocalCall(x *Ctx, lang string, member bool, caller, callee string, extra map[string]bool) bool {
+	return lang == "python" && !member && (x.LocalNames[caller][callee] || extra[callee])
+}
+
 func walkCalls(x *Ctx) {
 	cfg := x.Cfg
 	b := x.B
@@ -745,7 +751,7 @@ func walkCalls(x *Ctx) {
 						seen[pair] = true
 						b.AddEdgeCtx(caller, tgt, "calls", n.Line(), "call")
 					}
-				} else if tgt == "" && !(cfg.Lang == "python" && !member && (x.LocalNames[caller][callee] || extra[callee])) {
+				} else if tgt == "" && !isPyLocalCall(x, cfg.Lang, member, caller, callee, extra) {
 					rc := &model.RawCall{
 						CallerID:       caller,
 						Callee:         callee,

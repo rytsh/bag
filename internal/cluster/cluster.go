@@ -7,7 +7,9 @@
 package cluster
 
 import (
+	"maps"
 	"math/rand/v2"
+	"slices"
 	"sort"
 	"strings"
 
@@ -196,7 +198,7 @@ func Cluster(g *graph.Graph, opt Options) graph.Communities {
 
 	var final [][]string
 
-	for _, c := range sortedKeys(raw) {
+	for _, c := range slices.Sorted(maps.Keys(raw)) {
 		ms := raw[c]
 		if len(ms) > maxSize {
 			final = append(final, splitCommunity(g, ms)...)
@@ -271,7 +273,7 @@ func splitCommunity(g *graph.Graph, nodes []string) [][]string {
 
 	var out [][]string
 
-	for _, c := range sortedKeys(groups) {
+	for _, c := range slices.Sorted(maps.Keys(groups)) {
 		ms := groups[c]
 		sort.Strings(ms)
 		out = append(out, ms)
@@ -381,17 +383,6 @@ func itoa(i int) string {
 	}
 
 	return string(b)
-}
-
-func sortedKeys[V any](m map[int]V) []int {
-	out := make([]int, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-
-	sort.Ints(out)
-
-	return out
 }
 
 // ---- Leiden ----

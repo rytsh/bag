@@ -3,9 +3,11 @@ package export
 import (
 	"encoding/xml"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -35,11 +37,15 @@ func cypherEscape(s string) string {
 
 func cypherLabel(raw, fallback string) string {
 	c := cypherIdent.ReplaceAllString(raw, "")
-	if c == "" || !((c[0] >= 'A' && c[0] <= 'Z') || (c[0] >= 'a' && c[0] <= 'z')) {
+	if c == "" || !isASCIILetter(c[0]) {
 		return fallback
 	}
 
 	return c
+}
+
+func isASCIILetter(b byte) bool {
+	return (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z')
 }
 
 func capitalize(s string) string {
@@ -179,7 +185,7 @@ func ToGraphML(g *graph.Graph, c graph.Communities, out string) error {
 
 		gn := gmlNode{ID: xmlSafe(n.ID)}
 
-		for _, k := range sortedKeys(m) {
+		for _, k := range slices.Sorted(maps.Keys(m)) {
 			if strings.HasPrefix(k, "_") {
 				continue
 			}
@@ -201,7 +207,7 @@ func ToGraphML(g *graph.Graph, c graph.Communities, out string) error {
 
 		ge := gmlEdge{Source: xmlSafe(e.Source), Target: xmlSafe(e.Target)}
 
-		for _, k := range sortedKeys(m) {
+		for _, k := range slices.Sorted(maps.Keys(m)) {
 			if strings.HasPrefix(k, "_") {
 				continue
 			}
@@ -216,11 +222,11 @@ func ToGraphML(g *graph.Graph, c graph.Communities, out string) error {
 		doc.Graph.Edges = append(doc.Graph.Edges, ge)
 	}
 
-	for _, k := range sortedKeys(nodeKeys) {
+	for _, k := range slices.Sorted(maps.Keys(nodeKeys)) {
 		doc.Keys = append(doc.Keys, gmlKey{ID: "n_" + k, For: "node", AttrName: k, AttrType: nodeKeys[k]})
 	}
 
-	for _, k := range sortedKeys(edgeKeys) {
+	for _, k := range slices.Sorted(maps.Keys(edgeKeys)) {
 		doc.Keys = append(doc.Keys, gmlKey{ID: "e_" + k, For: "edge", AttrName: k, AttrType: edgeKeys[k]})
 	}
 
@@ -230,17 +236,6 @@ func ToGraphML(g *graph.Graph, c graph.Communities, out string) error {
 	}
 
 	return graph.WriteFileAtomic(out, append([]byte(xml.Header), raw...))
-}
-
-func sortedKeys[V any](m map[string]V) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-
-	sort.Strings(out)
-
-	return out
 }
 
 // ---------------- Wiki ----------------
@@ -522,7 +517,7 @@ func communityArticle(g *graph.Graph, cid int, nodes []string, label func(int) s
 	if len(srcs) > 0 {
 		L = append(L, "## Source Files", "")
 
-		ss := sortedKeys(srcs)
+		ss := slices.Sorted(maps.Keys(srcs))
 		for i := 0; i < len(ss) && i < 20; i++ {
 			L = append(L, "- `"+ss[i]+"`")
 		}
@@ -572,7 +567,7 @@ func godArticle(g *graph.Graph, id string, label func(int) string, nc map[string
 
 	L = append(L, "## Connections by Relation", "")
 
-	for _, rel := range sortedKeys(byRel) {
+	for _, rel := range slices.Sorted(maps.Keys(byRel)) {
 		ts := byRel[rel]
 		L = append(L, "### "+rel)
 

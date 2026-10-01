@@ -137,27 +137,27 @@ func emitRefsSeen(x *generic.Ctx, from string, line int, refs []typeRef, def str
 	}
 }
 
+// pyDecoratorName returns the decorator's name from its first named child.
 func pyDecoratorName(d *tsx.Node) string {
-	for _, c := range d.NamedChildren() {
-		t := c
-		if t.Type() == "call" {
-			if f := t.Field("function"); f != nil {
-				t = f
-			}
-		}
-
-		switch t.Type() {
-		case "attribute":
-			if a := t.Field("attribute"); a != nil {
-				return a.Text()
-			}
-
-			return ""
-		case "identifier":
-			return t.Text()
-		}
-
+	kids := d.NamedChildren()
+	if len(kids) == 0 {
 		return ""
+	}
+
+	t := kids[0]
+	if t.Type() == "call" {
+		if f := t.Field("function"); f != nil {
+			t = f
+		}
+	}
+
+	switch t.Type() {
+	case "attribute":
+		if a := t.Field("attribute"); a != nil {
+			return a.Text()
+		}
+	case "identifier":
+		return t.Text()
 	}
 
 	return ""

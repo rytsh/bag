@@ -26,7 +26,6 @@ const (
 )
 
 var (
-	nonWordRun  = regexp.MustCompile(`[\W_]+`)
 	chunkSuffix = regexp.MustCompile(`_c\d+$`)
 	variantSfx  = regexp.MustCompile(`^(.*[a-z])([0-9]+[a-z]*|[a-z]{2,})$`)
 	digitRun    = regexp.MustCompile(`\d+`)
