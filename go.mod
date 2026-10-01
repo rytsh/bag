@@ -16,6 +16,7 @@ require (
 	github.com/rakunlabs/into v0.6.0
 	github.com/rakunlabs/logi v0.4.6
 	github.com/rakunlabs/ok v0.1.0
+	github.com/tailscale/hujson v0.0.0-20260727124030-b80ff77dac4f
 	golang.org/x/text v0.42.0
 )
 

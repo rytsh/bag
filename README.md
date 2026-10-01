@@ -1,10 +1,11 @@
-# bag
+# bağ  🧶
 
 [![License](https://img.shields.io/github/license/rytsh/bag?color=blue&style=flat-square)](https://raw.githubusercontent.com/rytsh/bag/main/LICENSE)
 [![Coverage](https://img.shields.io/sonar/coverage/rytsh_bag?logo=sonarcloud&server=https%3A%2F%2Fsonarcloud.io&style=flat-square)](https://sonarcloud.io/summary/overall?id=rytsh_bag)
 
 `bag` turns a codebase (plus its docs, papers and images) into a **knowledge
-graph** you can query instead of grepping. It is a pure-Go reimplementation of
+graph** you can explore locally or give to your AI coding assistant. It is a
+pure-Go reimplementation of
 [Graphify](https://github.com/Graphify-Labs/graphify): same `graph.json` schema,
 same node IDs, same confidence tags, so graphs are interchangeable between the
 two tools.
@@ -26,10 +27,52 @@ two tools.
 
 ## Install
 
+### Prebuilt binaries (no Go required)
+
+Download an archive from [the latest GitHub release](https://github.com/rytsh/bag/releases/latest):
+
+| Platform | Archive |
+| --- | --- |
+| macOS (Apple Silicon / Intel) | `bag_<version>_darwin_arm64.tar.gz` / `bag_<version>_darwin_amd64.tar.gz` |
+| Linux (ARM64 / x86-64) | `bag_<version>_linux_arm64.tar.gz` / `bag_<version>_linux_amd64.tar.gz` |
+| Windows (ARM64 / x86-64) | `bag_<version>_windows_arm64.zip` / `bag_<version>_windows_amd64.zip` |
+
+Verify the archive's SHA-256 against `checksums.txt` from the same release
+(`shasum -a 256 <archive>` on macOS, `sha256sum <archive>` on Linux, or
+`Get-FileHash <archive> -Algorithm SHA256` in PowerShell). Extract it and put
+`bag` (Windows: `bag.exe`) in a directory on your `PATH`, then run `bag version`.
+On macOS/Linux, `~/.local/bin` is a user-local option; add it to your `PATH`
+if needed. No Python, Go installation or API key is needed for code extraction.
+
+### From source
+
 ```sh
 go install github.com/rytsh/bag/cmd/bag@latest
-# or
+# or, from a clone of this repository:
 make build
+```
+
+### Let your AI agent set it up
+
+Paste this into your coding assistant, opened in the repository you want to explore:
+
+```text
+Set up bag (https://github.com/rytsh/bag) for this repository.
+Read its README for the current commands. Detect my OS and CPU architecture,
+download the matching binary archive and checksums.txt from the latest official
+GitHub release, and verify the archive's SHA-256 before extracting it.
+Install the binary in a user-writable directory on PATH (no sudo); ask before
+overwriting an existing installation or changing shell configuration.
+Run `bag version`, then `bag extract .` from this repository's root without
+--semantic: keep extraction local and do not configure an API key.
+Ask which assistant integration I want, then run
+`bag install --platform <agents|claude|opencode|cursor>`.
+Leave AGENTS.md and CLAUDE.md untouched; ask before replacing any existing bag skill
+or rule. Do not install Git hooks or change MCP settings without asking.
+If I want MCP, use `bag install --platform <claude|opencode|cursor> --mcp`
+to configure the binary as a project-local stdio server alongside the skill.
+Run `bag stats` and show one useful `bag query` using real symbols from this
+repository. Report the files you created or changed.
 ```
 
 ## Quick start
@@ -52,6 +95,37 @@ graphify-out/
 └── cache/            content-addressed AST (and LLM) cache
 ```
 
+Run these commands from the repository root. `AuthService`, `Database` and
+`RateLimiter` are examples; use names from your own code.
+
+For settings shared by `extract`, `update` and `watch`, keep exclusions in
+`.bagignore` and set the output directory with `BAG_OUT_DIR` or `bag.yaml`.
+`update` does not inherit the flags from a previous `extract` invocation.
+
+## When is it useful?
+
+- **Onboarding and architecture:** find central symbols, module groups and
+  connections across files in `GRAPH_REPORT.md` and `graph.html`.
+- **Tracing relationships:** use `path` and `explain` to explore calls, imports
+  and type relationships before reading the relevant source.
+- **AI coding assistants:** `bag query "<question>" --budget 1500` returns scoped graph context
+  with source locations; `serve` exposes it through MCP.
+- **Repeated local use:** `update` reuses the AST cache; `watch` keeps the graph
+  fresh while you work.
+
+`bag query` is keyword/symbol search plus graph traversal, **not an LLM-written
+answer**. Specific symbol names work best. The graph complements grep, source
+reading and tests; it is not a complete runtime call graph and cannot prove
+that a change is safe. Code extraction and queries need no API key. Only
+`extract --semantic` enables the optional model-backed pass.
+
+To install an assistant skill, run `bag install --platform agents`
+from the repository root (or choose `claude`, `opencode` or `cursor`). This
+configures how the assistant uses the graph; it does **not** install the binary.
+The default `agents` target writes `.agents/skills/bag/SKILL.md`; Claude and
+OpenCode use `.claude/skills/bag/SKILL.md` and `.opencode/skills/bag/SKILL.md`.
+Cursor gets `.cursor/rules/bag.mdc`. No target edits `AGENTS.md` or `CLAUDE.md`.
+
 ## Commands
 
 | Command | What it does |
@@ -67,8 +141,8 @@ graphify-out/
 | `cluster-only [dir]` | Re-cluster an existing graph.json and rewrite the report/HTML |
 | `export html\|graphml\|cypher\|wiki\|obsidian` | Other output formats |
 | `diff <old> <new>` | Compare two graph.json files |
-| `serve` | MCP server over stdio, or `--transport http` (streamable HTTP + REST API) |
-| `install --platform agents\|claude\|opencode\|cursor\|all` | Tell your assistant to use the graph |
+| `serve` | Project MCP server over stdio (queries + AST builds); `--read-only` disables builds. `--transport http` provides read-only MCP + REST API |
+| `install --platform agents\|claude\|opencode\|cursor\|all [--mcp]` | Install a skill/rule; optionally configure project-local stdio MCP for a supported client |
 | `languages` | Supported languages and extensions |
 
 ## Go library
@@ -95,16 +169,60 @@ upgrade.
 
 ## MCP
 
+For frequent queries, MCP keeps the graph in memory instead of reloading it
+for each CLI invocation. Install it together with the assistant skill/rule:
+
 ```sh
-bag serve                                   # stdio, for local assistants
+bag install --platform opencode --mcp   # OpenCode V2 project config
+bag install --platform claude --mcp     # .mcp.json
+bag install --platform cursor --mcp     # .cursor/mcp.json
+```
+
+Run from the project root, using the installed `bag` binary (not `go run`).
+The config records the binary's absolute path, project root and graph path;
+rerun installation if you move the binary or project. OpenCode installation
+reuses an existing project `opencode.json(c)` (including `.opencode/` configs),
+or creates `opencode.json`. Other settings, servers and JSONC comments are
+preserved. A different existing `bag` entry requires `--replace-mcp`.
+`--platform all --mcp` configures all three clients; the generic `agents`
+target is skill-only because there is no universal MCP config location.
+No installation edits `AGENTS.md` or `CLAUDE.md`.
+
+Restart/reconnect the assistant and approve the server if prompted. The client
+starts `bag serve` itself over stdin/stdout; no port or separate terminal is
+needed. The skill prefers MCP tools when connected and uses CLI otherwise.
+
+### Server modes and tools
+
+```sh
+bag serve --root /path/to/project            # stdio, queries + local AST builds
+bag serve --read-only --graph /path/to/graph.json
 bag serve --transport http --host 0.0.0.0 --api-key "$SECRET"
 ```
 
-The tools use Graphify's names (`query_graph`, `get_node`, `get_neighbors`,
+Query tools use Graphify's names (`query_graph`, `get_node`, `get_neighbors`,
 `get_community`, `god_nodes`, `graph_stats`, `shortest_path`), so existing
-assistant configs keep working. The HTTP server also exposes `/healthz` and
+assistant configs keep working. Writable stdio servers also provide:
+
+- **`extract_graph`**: first AST build; writes graph, report, HTML and cache.
+- **`update_graph`**: rebuild after code changes, reusing the per-file AST cache.
+
+Both operate only on the fixed `--root` project and configured output directory
+inside it. They run the Go pipeline directly, without spawning `bag` or making
+LLM calls. `.gitignore`, `.bagignore` and `.graphifyignore` are honored. Tool
+arguments cannot select another project or output path. `no_viz: true` skips
+HTML. Both refuse to replace a larger graph with a smaller one unless
+`force: true` is explicitly passed (e.g. after deleting source files).
+
+The writable stdio server can start before `graph.json` exists: call
+`extract_graph` first, then query it. Builds do not run automatically on startup
+or source changes. `--read-only` and HTTP expose no build tools and require an
+existing graph. Read-only mode can serve graphs outside the project root.
+
+The HTTP server also exposes `/healthz` and
 `/api/v1/{stats,query,path,explain}`. The graph file is hot-reloaded when it
-changes.
+changes, including after MCP builds. Keep HTTP on loopback unless remote access
+is intended; use an API key and appropriate network protection if exposing it.
 
 ## Configuration
 

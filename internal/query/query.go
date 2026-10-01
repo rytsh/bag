@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"unicode"
 
 	"golang.org/x/text/unicode/norm"
@@ -56,6 +57,7 @@ type Engine struct {
 
 	nc    map[string]int
 	idf   map[string]float64
+	idfMu sync.RWMutex
 	norms map[string]string
 	toks  map[string]string
 }
@@ -74,7 +76,10 @@ func New(g *graph.Graph, c graph.Communities, labels map[int]string) *Engine {
 }
 
 func (e *Engine) idfOf(t string) float64 {
-	if v, ok := e.idf[t]; ok {
+	e.idfMu.RLock()
+	v, ok := e.idf[t]
+	e.idfMu.RUnlock()
+	if ok {
 		return v
 	}
 
@@ -91,8 +96,10 @@ func (e *Engine) idfOf(t string) float64 {
 		}
 	}
 
-	v := math.Log((n+1)/(df+1)) + 1
+	v = math.Log((n+1)/(df+1)) + 1
+	e.idfMu.Lock()
 	e.idf[t] = v
+	e.idfMu.Unlock()
 
 	return v
 }

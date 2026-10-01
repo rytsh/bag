@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 
 	"github.com/rytsh/bag/internal/config"
+	"github.com/rytsh/bag/internal/pipeline"
 	"github.com/rytsh/bag/internal/server"
 )
 
@@ -19,6 +21,8 @@ func runServe(ctx context.Context, args []string) error {
 
 	fs := newFlags("serve")
 	gp := fs.String("graph", "", "path to graph.json")
+	root := fs.String("root", ".", "fixed project root for stdio graph builds")
+	readOnly := fs.Bool("read-only", false, "disable stdio extract_graph/update_graph (HTTP is always read-only)")
 	transport := fs.String("transport", "stdio", "stdio or http")
 	host := fs.String("host", cfg.Server.Host, "HTTP bind host")
 	port := fs.String("port", cfg.Server.Port, "HTTP bind port")
@@ -36,7 +40,23 @@ func runServe(ctx context.Context, args []string) error {
 		target = pos[0]
 	}
 
-	store, err := server.NewStore(resolveGraphPath(ctx, target))
+	var store *server.Store
+	if *transport == "stdio" && !*readOnly {
+		projectRoot, rootErr := filepath.Abs(*root)
+		if rootErr != nil {
+			return fmt.Errorf("resolve project root; %w", rootErr)
+		}
+		if target == "" {
+			target = filepath.Join(pipeline.OutDir(projectRoot, cfg.OutDir), "graph.json")
+		} else {
+			target = resolveGraphPath(ctx, target)
+		}
+		store, err = server.NewProjectStore(target, pipeline.Options{
+			Root: projectRoot, Gitignore: true, Workers: cfg.Workers, Resolution: 1.0,
+		})
+	} else {
+		store, err = server.NewStore(resolveGraphPath(ctx, target))
+	}
 	if err != nil {
 		return fmt.Errorf("load graph; %w", err)
 	}

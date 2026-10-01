@@ -24,6 +24,7 @@ import (
 	"github.com/rytsh/bag/internal/analyze"
 	"github.com/rytsh/bag/internal/graph"
 	"github.com/rytsh/bag/internal/model"
+	"github.com/rytsh/bag/internal/pipeline"
 	"github.com/rytsh/bag/internal/query"
 )
 
@@ -31,11 +32,14 @@ import (
 type Store struct {
 	path string
 
-	mu     sync.RWMutex
-	loaded *graph.Loaded
-	engine *query.Engine
-	mtime  time.Time
-	size   int64
+	mu           sync.RWMutex
+	loaded       *graph.Loaded
+	engine       *query.Engine
+	mtime        time.Time
+	size         int64
+	reloadMu     sync.Mutex
+	buildMu      sync.Mutex
+	buildOptions *pipeline.Options
 }
 
 // NewStore loads path.
@@ -49,6 +53,9 @@ func NewStore(path string) (*Store, error) {
 }
 
 func (s *Store) reload() error {
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+
 	st, err := os.Stat(s.path)
 	if err != nil {
 		return err
@@ -152,7 +159,34 @@ func truncate(s string, tokens int) string {
 // NewMCPServer builds an MCP server over store with Graphify-compatible
 // tool names.
 func NewMCPServer(store *Store, version string) *mcp.Server {
+	return newMCPServer(store, version, true)
+}
+
+func newMCPServer(store *Store, version string, allowBuild bool) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "bag", Version: version}, nil)
+	s.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			if method == "tools/call" {
+				call := req.(*mcp.CallToolRequest)
+				if call.Params.Name != "extract_graph" && call.Params.Name != "update_graph" {
+					if loaded, _ := store.Get(); loaded == nil {
+						result, _, _ := text("Graph not built yet; call extract_graph first.")
+						result.IsError = true
+						return result, nil
+					}
+				}
+			}
+			if method == "resources/read" {
+				if loaded, _ := store.Get(); loaded == nil {
+					return nil, fmt.Errorf("graph not built yet; call extract_graph first")
+				}
+			}
+			return next(ctx, method, req)
+		}
+	})
+	if allowBuild && store.buildOptions != nil {
+		addBuildTools(s, store)
+	}
 
 	mcp.AddTool(s, &mcp.Tool{Name: "query_graph",
 		Description: "Search the knowledge graph using BFS or DFS. Returns relevant nodes and edges as text context."},
@@ -335,7 +369,10 @@ type HTTPOptions struct {
 // ServeHTTP serves MCP (streamable HTTP) plus a small REST API until ctx is
 // cancelled.
 func ServeHTTP(ctx context.Context, store *Store, opt HTTPOptions) error {
-	srv := NewMCPServer(store, opt.Version)
+	if loaded, _ := store.Get(); loaded == nil {
+		return fmt.Errorf("HTTP server requires an existing graph")
+	}
+	srv := newMCPServer(store, opt.Version, false)
 	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv },
 		&mcp.StreamableHTTPOptions{Stateless: opt.Stateles})
 
