@@ -27,8 +27,8 @@ lint: ## Run vet and gofmt checks
 .PHONY: parity
 parity: build ## Compare bag against Graphify on a directory: make parity DIR=path
 	@test -n "$(DIR)" || (echo "usage: make parity DIR=path" && exit 1)
-	cd $(DIR) && graphify extract . --code-only >/dev/null && $(CURDIR)/$(BINARY) extract . --out bag-out --no-cache --force
-	python3 scripts/compare.py $(DIR)/graphify-out/graph.json $(DIR)/bag-out/graph.json
+	cd $(DIR) && graphify extract . --code-only >/dev/null && $(CURDIR)/$(BINARY) extract . --no-cache --force
+	python3 scripts/compare.py $(DIR)/graphify-out/graph.json $(DIR)/.bag/graph.json
 
 .PHONY: clean
 clean: ## Remove build artifacts

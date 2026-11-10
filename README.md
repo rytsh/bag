@@ -78,17 +78,17 @@ repository. Report the files you created or changed.
 ## Quick start
 
 ```sh
-bag extract .                  # graphify-out/graph.json, GRAPH_REPORT.md, graph.html
+bag extract .                  # .bag/graph.json, GRAPH_REPORT.md, graph.html
 bag query "how does auth reach the database"
 bag path AuthService Database
 bag explain RateLimiter
 bag update .                   # fast rebuild, reuses the per-file AST cache
 ```
 
-Output (same layout as Graphify):
+Output (same files as Graphify, under `.bag/` instead of `graphify-out/`):
 
 ```
-graphify-out/
+.bag/
 ├── graph.json        the full graph (Graphify node_link format)
 ├── GRAPH_REPORT.md   god nodes, communities, surprising connections, questions
 ├── graph.html        interactive vis-network view
@@ -160,7 +160,7 @@ merged, err := bag.MergeGraphs(ctx, mergedPath, graphPaths...)
 ```
 
 Import `github.com/rytsh/bag`. `Build` writes the standard
-`graphify-out/{graph.json,GRAPH_REPORT.md,graph.html}` layout and performs no
+`.bag/{graph.json,GRAPH_REPORT.md,graph.html}` layout and performs no
 network or LLM calls. `MergeGraphs` applies Graphify-compatible repo prefixes,
 community offsets, global external stubs, shared-type links and parked
 cross-repository call resolution. Persist `bag.EngineVersion` beside validated
@@ -240,7 +240,7 @@ environment variables are applied last and override file values.
 | Env | Default | Purpose |
 | --- | --- | --- |
 | `BAG_LOG_LEVEL` | `info` | log level |
-| `BAG_OUT_DIR` | `graphify-out` | output directory |
+| `BAG_OUT_DIR` | `.bag` | output directory |
 | `BAG_WORKERS` | CPU count | extraction parallelism |
 | `BAG_LLM_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible endpoint (e.g. `http://localhost:11434/v1` for Ollama) |
 | `BAG_LLM_API_KEY` | | API key (never logged) |
@@ -259,7 +259,7 @@ Files are filtered with `.gitignore`, `.graphifyignore` and `.bagignore`
 keys, credentials) are always skipped.
 
 With `--semantic`, video and audio files (`.mp4 .mov .webm .mkv .avi .m4v
-.mp3 .wav .m4a .ogg`) are transcribed to `graphify-out/transcripts/<stem>.txt`
+.mp3 .wav .m4a .ogg`) are transcribed to `.bag/transcripts/<stem>.txt`
 and then read as documents, like Graphify's Whisper step. The prompt is built
 from the AST god nodes (`GRAPHIFY_WHISPER_PROMPT` overrides it). Files the API
 accepts are uploaded as-is; other containers and oversized files need

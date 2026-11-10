@@ -25,7 +25,7 @@ const (
 )
 
 // DefaultOutDir is the output directory that is never scanned as input.
-const DefaultOutDir = "graphify-out"
+const DefaultOutDir = ".bag"
 
 var (
 	DocExtensions   = set(".md", ".mdx", ".qmd", ".skill", ".txt", ".rst", ".html", ".yaml", ".yml")
@@ -39,7 +39,7 @@ var skipDirs = set(
 	"dist", "build", "target", "site-packages", "lib64",
 	".pytest_cache", ".mypy_cache", ".ruff_cache",
 	".tox", ".nox", ".eggs",
-	"graphify-out", "bag-out",
+	".bag", "graphify-out", "bag-out",
 	"lcov-report", "visual-tests", "visual-test", "__snapshots__",
 	"storybook-static", "dist-protected",
 	".next", ".nuxt", ".turbo", ".angular",

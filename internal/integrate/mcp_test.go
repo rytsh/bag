@@ -34,7 +34,7 @@ func TestMCPInstallPreservesSettingsAndComments(t *testing.T) {
 			}
 			root := filepath.Join(t.TempDir(), "project with spaces")
 			binary := filepath.Join(t.TempDir(), "bag executable")
-			graphPath := filepath.Join(root, "graphify-out", "graph.json")
+			graphPath := filepath.Join(root, ".bag", "graph.json")
 			files, err := PrepareMCP(client, binary, root, graphPath, false)
 			if err != nil {
 				t.Fatal(err)

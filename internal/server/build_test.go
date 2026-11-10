@@ -56,7 +56,7 @@ func resultText(result *mcp.CallToolResult) string {
 
 func TestProjectMCPBuildAndUpdate(t *testing.T) {
 	root := t.TempDir()
-	path := filepath.Join(root, "graphify-out", "graph.json")
+	path := filepath.Join(root, ".bag", "graph.json")
 	writeCode := func(code string) {
 		t.Helper()
 		if err := os.WriteFile(filepath.Join(root, "main.go"), []byte(code), 0o600); err != nil {
@@ -94,7 +94,7 @@ func TestProjectMCPBuildAndUpdate(t *testing.T) {
 	if build.IsError {
 		t.Fatal(resultText(build))
 	}
-	for _, file := range []string{"graph.json", "GRAPH_REPORT.md", "graph.html", ".graphify_root", "cache"} {
+	for _, file := range []string{"graph.json", "GRAPH_REPORT.md", "graph.html", ".bag_root", "cache"} {
 		if _, err := os.Stat(filepath.Join(filepath.Dir(path), file)); err != nil {
 			t.Fatal(err)
 		}
@@ -162,7 +162,7 @@ func TestProjectMCPBuildAndUpdate(t *testing.T) {
 
 func TestReadOnlyMCPDoesNotOfferBuildTools(t *testing.T) {
 	root := t.TempDir()
-	path := filepath.Join(root, "graphify-out", "graph.json")
+	path := filepath.Join(root, ".bag", "graph.json")
 	project, err := NewProjectStore(path, pipeline.Options{Root: root})
 	if err != nil {
 		t.Fatal(err)
@@ -195,7 +195,7 @@ func TestProjectStoreRejectsEscapingOutput(t *testing.T) {
 	if _, err := NewProjectStore(filepath.Join(link, "new", "graph.json"), pipeline.Options{Root: root}); err == nil {
 		t.Fatal("accepted output through symlink outside project")
 	}
-	path := filepath.Join(root, "graphify-out", "graph.json")
+	path := filepath.Join(root, ".bag", "graph.json")
 	project, err := NewProjectStore(path, pipeline.Options{Root: root})
 	if err != nil {
 		t.Fatal(err)

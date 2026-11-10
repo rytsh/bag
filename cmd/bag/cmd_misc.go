@@ -42,14 +42,14 @@ func runLanguages(_ context.Context, _ []string) error {
 
 const agentSection = `## bag knowledge graph
 
-This repository has a code knowledge graph at graphify-out/graph.json
+This repository has a code knowledge graph at .bag/graph.json
 (Graphify-compatible, built by bag).
 
 - Before grepping or reading many files to answer an architecture question,
   run ` + "`bag query \"<question>\"`" + ` for a scoped subgraph.
 - Use ` + "`bag path <A> <B>`" + ` to see how two concepts connect and
   ` + "`bag explain <name>`" + ` for one node's connections.
-- graphify-out/GRAPH_REPORT.md summarizes god nodes, communities and
+- .bag/GRAPH_REPORT.md summarizes god nodes, communities and
   surprising connections.
 - After code changes run ` + "`bag update .`" + ` (AST only, no API cost).
 - If the bag MCP server is connected, prefer its query_graph, shortest_path,
@@ -59,7 +59,7 @@ This repository has a code knowledge graph at graphify-out/graph.json
 
 const skillBody = `---
 name: bag
-description: Query the repository knowledge graph (graphify-out/graph.json) built by bag instead of grepping. Use for architecture questions, "how does X connect to Y", impact analysis, and finding where a concept lives.
+description: Query the repository knowledge graph (.bag/graph.json) built by bag instead of grepping. Use for architecture questions, "how does X connect to Y", impact analysis, and finding where a concept lives.
 ---
 
 # bag
@@ -89,7 +89,7 @@ Ask the graph:
     bag path AuthService Database
     bag explain RateLimiter
 
-Read graphify-out/GRAPH_REPORT.md for the high-level map (god nodes,
+Read .bag/GRAPH_REPORT.md for the high-level map (god nodes,
 communities, surprising connections). Serve it to MCP clients with
 ` + "`bag serve`" + ` (stdio) or ` + "`bag serve --transport http`" + `.
 `

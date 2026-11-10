@@ -72,7 +72,7 @@ func loadEngine(ctx context.Context, p string) (*query.Engine, *graph.Loaded, er
 
 func runQuery(ctx context.Context, args []string) error {
 	fs := newFlags("query")
-	gp := fs.String("graph", "", "path to graph.json (default: nearest graphify-out/graph.json)")
+	gp := fs.String("graph", "", "path to graph.json (default: nearest .bag/graph.json)")
 	depth := fs.Int("depth", 2, "traversal depth")
 	dfs := fs.Bool("dfs", false, "depth-first traversal")
 	budget := fs.Int("budget", 2000, "approximate token budget of the answer")

@@ -50,7 +50,7 @@ type TranscribeConfig struct {
 	// media ("" = look up on PATH, "-" = never use ffmpeg).
 	FFmpeg  string
 	Timeout time.Duration
-	// OutDir receives <stem>.txt transcripts (graphify-out/transcripts).
+	// OutDir receives <stem>.txt transcripts (.bag/transcripts).
 	OutDir string
 	Force  bool
 }

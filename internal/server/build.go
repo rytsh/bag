@@ -119,7 +119,7 @@ func (s *Store) build(ctx context.Context, a buildArgs) (*mcp.CallToolResult, an
 		return nil, nil, err
 	}
 	opt := *s.buildOptions
-	for _, name := range []string{"graph.json", "GRAPH_REPORT.md", "graph.html", ".graphify_root", ".graphify_analysis.json"} {
+	for _, name := range []string{"graph.json", "GRAPH_REPORT.md", "graph.html", ".bag_root", ".bag_analysis.json"} {
 		if err := projectPath(opt.Root, filepath.Join(opt.OutDir, name)); err != nil {
 			return nil, nil, err
 		}

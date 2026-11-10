@@ -152,7 +152,7 @@ func node(id, label, source string, community int, metadata map[string]any, clas
 
 func writeGraph(t *testing.T, root, repo string, doc map[string]any) string {
 	t.Helper()
-	path := filepath.Join(root, repo, "graphify-out", "graph.json")
+	path := filepath.Join(root, repo, ".bag", "graph.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}

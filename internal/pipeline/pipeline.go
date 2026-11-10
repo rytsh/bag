@@ -65,7 +65,7 @@ type Output struct {
 	Tokens      [2]int
 }
 
-// Analysis is persisted next to graph.json (.graphify_analysis.json).
+// Analysis is persisted next to graph.json (.bag_analysis.json).
 type Analysis struct {
 	Communities map[string][]string `json:"communities"`
 	Cohesion    map[string]float64  `json:"cohesion"`
@@ -237,11 +237,11 @@ func (o *Output) Write(force bool) error {
 		return err
 	}
 
-	if err := graph.WriteFileAtomic(filepath.Join(o.OutDir, ".graphify_analysis.json"), raw); err != nil {
+	if err := graph.WriteFileAtomic(filepath.Join(o.OutDir, ".bag_analysis.json"), raw); err != nil {
 		return err
 	}
 
-	return os.WriteFile(filepath.Join(o.OutDir, ".graphify_root"), []byte(o.Root), 0o644)
+	return os.WriteFile(filepath.Join(o.OutDir, ".bag_root"), []byte(o.Root), 0o644)
 }
 
 // WriteReport renders GRAPH_REPORT.md.
@@ -272,7 +272,7 @@ func FromGraph(graphPath string) (*Output, error) {
 	out := filepath.Dir(graphPath)
 
 	root := filepath.Dir(out)
-	if raw, err := os.ReadFile(filepath.Join(out, ".graphify_root")); err == nil {
+	if raw, err := os.ReadFile(filepath.Join(out, ".bag_root")); err == nil {
 		root = strings.TrimSpace(string(raw))
 	}
 

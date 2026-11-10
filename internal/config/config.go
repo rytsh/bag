@@ -24,7 +24,7 @@ type Config struct {
 	LogLevel string `cfg:"log_level" default:"info"`
 
 	// OutDir is the output directory relative to the corpus root.
-	OutDir string `cfg:"out_dir" default:"graphify-out"`
+	OutDir string `cfg:"out_dir" default:".bag"`
 	// Workers is the AST extraction parallelism (0 = NumCPU).
 	Workers int `cfg:"workers"`
 
@@ -118,5 +118,5 @@ func From(ctx context.Context) *Config {
 		return c
 	}
 
-	return &Config{OutDir: "graphify-out"}
+	return &Config{OutDir: ".bag"}
 }

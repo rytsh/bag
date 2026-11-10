@@ -21,7 +21,7 @@ const EngineVersion = store.ASTVersion
 
 // BuildOptions configures an AST-only graph build.
 type BuildOptions struct {
-	// OutDir is absolute or relative to Root. Empty uses graphify-out.
+	// OutDir is absolute or relative to Root. Empty uses .bag.
 	OutDir string
 	// Excludes are additional gitignore-style patterns anchored at Root.
 	Excludes []string
@@ -144,13 +144,13 @@ func MergeGraphs(ctx context.Context, out string, graphs ...string) (*MergeResul
 	return &MergeResult{Path: result.Path, Nodes: result.Nodes, Edges: result.Edges}, nil
 }
 
-// GraphPath returns graph.json's compatibility path under a repository.
-func GraphPath(root string) string { return filepath.Join(root, "graphify-out", "graph.json") }
+// GraphPath returns graph.json's default path under a repository.
+func GraphPath(root string) string { return filepath.Join(root, ".bag", "graph.json") }
 
-// ReportPath returns GRAPH_REPORT.md's compatibility path under a repository.
+// ReportPath returns GRAPH_REPORT.md's default path under a repository.
 func ReportPath(root string) string {
-	return filepath.Join(root, "graphify-out", "GRAPH_REPORT.md")
+	return filepath.Join(root, ".bag", "GRAPH_REPORT.md")
 }
 
-// HTMLPath returns graph.html's compatibility path under a repository.
-func HTMLPath(root string) string { return filepath.Join(root, "graphify-out", "graph.html") }
+// HTMLPath returns graph.html's default path under a repository.
+func HTMLPath(root string) string { return filepath.Join(root, ".bag", "graph.html") }

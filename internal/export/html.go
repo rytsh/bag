@@ -254,7 +254,7 @@ func ToHTML(g *graph.Graph, c graph.Communities, outPath string, opt HTMLOptions
 func htmlTitle(out string) string {
 	parts := strings.Split(filepath.ToSlash(out), "/")
 	for i, p := range parts {
-		if strings.HasPrefix(p, "graphify-out") || p == "bag-out" {
+		if p == ".bag" || strings.HasPrefix(p, "graphify-out") || p == "bag-out" {
 			return strings.Join(parts[i:], "/")
 		}
 	}
