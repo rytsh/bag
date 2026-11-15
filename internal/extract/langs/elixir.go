@@ -152,7 +152,7 @@ func ExtractElixir(path, _ string, src []byte) *model.Extraction {
 			}
 
 			id := ids.MakeID(b.Stem, name)
-			if mn := b.AddNode(id, name, line); parent == "" {
+			if mn := b.AddNode(id, name, line).SetEndLine(n.EndLine()); parent == "" {
 				mn.TopModule = true
 			}
 
@@ -184,7 +184,7 @@ func ExtractElixir(path, _ string, src []byte) *model.Extraction {
 				label = proto + " (for " + target + ")"
 			}
 
-			b.AddNode(id, label, line)
+			b.AddNode(id, label, line).SetEndLine(n.EndLine())
 
 			owner := parent
 			if owner == "" {
@@ -232,7 +232,7 @@ func ExtractElixir(path, _ string, src []byte) *model.Extraction {
 			}
 
 			fid := ids.MakeID(container, fn)
-			b.AddNode(fid, fn+"()", line)
+			b.AddNode(fid, fn+"()", line).SetEndLine(n.EndLine())
 
 			if parent != "" {
 				b.AddEdge(parent, fid, "method", line)

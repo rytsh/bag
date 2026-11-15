@@ -105,7 +105,7 @@ func ExtractJulia(path, _ string, src []byte) *model.Extraction {
 		case "module_definition":
 			if id := n.ChildOfType("identifier"); id != nil {
 				mid := ids.MakeID(b.Stem, id.Text())
-				b.AddNode(mid, id.Text(), line)
+				b.AddNode(mid, id.Text(), line).SetEndLine(n.EndLine())
 				b.AddEdge(b.FileID, mid, "defines", line)
 
 				for _, c := range n.Children() {
@@ -126,7 +126,7 @@ func ExtractJulia(path, _ string, src []byte) *model.Extraction {
 			}
 
 			sid := ids.MakeID(b.Stem, name)
-			b.AddNode(sid, name, line)
+			b.AddNode(sid, name, line).SetEndLine(n.EndLine())
 			b.AddEdge(scope, sid, "defines", line)
 
 			if sup != "" {
@@ -191,7 +191,7 @@ func ExtractJulia(path, _ string, src []byte) *model.Extraction {
 				fid, label = ids.MakeID(b.Stem, name), name+"()"
 			}
 
-			b.AddNode(fid, label, line)
+			b.AddNode(fid, label, line).SetEndLine(n.EndLine())
 			b.AddEdge(scope, fid, "defines", line)
 			bodies = append(bodies, rustBody{id: fid, node: n})
 

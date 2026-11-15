@@ -316,7 +316,7 @@ func jsNestedFunctions(x *generic.Ctx, container *tsx.Node, parent string) {
 			}
 
 			id := ids.MakeID(parent, nn.Text())
-			x.B.AddNode(id, nn.Text()+"()", c.Line())
+			x.B.AddNode(id, nn.Text()+"()", c.Line()).SetEndLine(c.EndLine())
 			x.B.AddEdge(parent, id, "contains", c.Line())
 			x.MarkCallable(id, false)
 			x.LocalNames[id] = jsLocalNames(c)
@@ -391,12 +391,12 @@ func jsExtraWalk(x *generic.Ctx, n *tsx.Node, parentClass string) bool {
 					switch kind {
 					case "exports":
 						id = ids.MakeID(b.Stem, member)
-						b.AddNode(id, member+"()", line)
+						b.AddNode(id, member+"()", line).SetEndLine(n.EndLine())
 						b.AddEdge(b.FileID, id, "contains", line)
 					case "prototype":
 						oid := ids.MakeID(b.Stem, owner)
 						id = ids.MakeID(oid, member)
-						b.AddNode(id, "."+member+"()", line)
+						b.AddNode(id, "."+member+"()", line).SetEndLine(n.EndLine())
 						b.AddEdge(oid, id, "method", line)
 					}
 
@@ -427,7 +427,7 @@ func jsExtraWalk(x *generic.Ctx, n *tsx.Node, parentClass string) bool {
 		if prop != nil && value != nil && jsFunctionValueTypes.Has(value.Type()) {
 			if name := prop.Text(); name != "" {
 				id := ids.MakeID(parentClass, name)
-				b.AddNode(id, "."+name+"()", n.Line())
+				b.AddNode(id, "."+name+"()", n.Line()).SetEndLine(n.EndLine())
 				b.AddEdge(parentClass, id, "method", n.Line())
 				x.MarkCallable(id, false)
 				x.LocalNames[id] = jsLocalNames(value)
@@ -471,7 +471,7 @@ func jsExtraWalk(x *generic.Ctx, n *tsx.Node, parentClass string) bool {
 				}
 
 				id := ids.MakeID(b.Stem, name.Text())
-				b.AddNode(id, name.Text()+"()", line)
+				b.AddNode(id, name.Text()+"()", line).SetEndLine(c.EndLine())
 				b.AddEdge(b.FileID, id, "contains", line)
 				x.MarkCallable(id, false)
 				x.LocalNames[id] = jsLocalNames(value)

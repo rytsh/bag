@@ -61,6 +61,10 @@ func NodeMap(n *model.Node) map[string]any {
 		m["source_location"] = n.SourceLocation
 	}
 
+	if n.EndLine > 0 {
+		m["end_line"] = n.EndLine
+	}
+
 	if n.Type != "" {
 		m["type"] = n.Type
 	}

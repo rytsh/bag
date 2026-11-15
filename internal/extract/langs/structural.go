@@ -23,6 +23,9 @@ func (b *structuralBuilder) node(id, label, kind string, n *tsx.Node, sourced, c
 		return id
 	}
 	item := b.AddNode(id, label, n.Line())
+	if sourced {
+		item.SetEndLine(n.EndLine())
+	}
 	item.Metadata = map[string]any{"language": b.language, "kind": kind}
 	item.MetaOrder = []string{"language", "kind"}
 	item.Callable = callable

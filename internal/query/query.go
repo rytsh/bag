@@ -426,7 +426,7 @@ func (e *Engine) Render(nodes map[string]bool, edges [][2]string, budget int, se
 	for _, id := range append(hits, rest...) {
 		n := e.G.Node(id)
 		lines = append(lines, fmt.Sprintf("NODE %s [src=%s loc=%s community=%s]",
-			n.Label, n.SourceFile, n.SourceLocation, e.communityName(id)))
+			n.Label, n.SourceFile, n.Span(), e.communityName(id)))
 	}
 
 	for _, ed := range edges {
@@ -621,7 +621,7 @@ func (e *Engine) Explain(label string) string {
 	var sb strings.Builder
 
 	fmt.Fprintf(&sb, "Node: %s\n  ID:        %s\n  Source:    %s %s\n  Type:      %s\n  Community: %s\n  Degree:    %d\n",
-		n.Label, n.ID, n.SourceFile, n.SourceLocation, n.FileType, e.communityName(id), e.G.Degree(id))
+		n.Label, n.ID, n.SourceFile, n.Span(), n.FileType, e.communityName(id), e.G.Degree(id))
 
 	nbs := e.G.Neighbors(id)
 	sort.SliceStable(nbs, func(i, j int) bool { return e.G.Degree(nbs[i]) > e.G.Degree(nbs[j]) })

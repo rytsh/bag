@@ -17,7 +17,7 @@ type Loaded struct {
 }
 
 var nodeKnown = map[string]bool{
-	"id": true, "label": true, "file_type": true, "source_file": true, "source_location": true,
+	"id": true, "label": true, "file_type": true, "source_file": true, "source_location": true, "end_line": true,
 	"type": true, "metadata": true, "community": true, "community_name": true, "norm_label": true,
 	"_callable": true, "_callable_class": true,
 }
@@ -65,6 +65,7 @@ func Parse(raw []byte) (*Loaded, error) {
 			FileType:       str(m["file_type"]),
 			SourceFile:     str(m["source_file"]),
 			SourceLocation: str(m["source_location"]),
+			EndLine:        intOf(m["end_line"]),
 			Type:           str(m["type"]),
 			Callable:       m["_callable"] == true,
 			CallableClass:  m["_callable_class"] == true,
@@ -188,4 +189,20 @@ func str(v any) string {
 	default:
 		return fmt.Sprintf("%v", t)
 	}
+}
+
+// intOf reads a non-negative JSON integer; anything else is 0.
+func intOf(v any) int {
+	switch t := v.(type) {
+	case float64:
+		if t > 0 && t == float64(int(t)) {
+			return int(t)
+		}
+	case int:
+		if t > 0 {
+			return t
+		}
+	}
+
+	return 0
 }

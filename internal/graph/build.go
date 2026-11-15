@@ -512,6 +512,12 @@ func mergeMissing(dst, src *model.Node) {
 		dst.SourceLocation = src.SourceLocation
 	}
 
+	// An end line belongs to the location it ends, so it is only taken along
+	// with that location or when the two nodes agree on where they start.
+	if dst.EndLine == 0 && dst.SourceLocation == src.SourceLocation {
+		dst.EndLine = src.EndLine
+	}
+
 	if dst.Type == "" {
 		dst.Type = src.Type
 	}

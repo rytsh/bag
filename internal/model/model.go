@@ -7,6 +7,7 @@ package model
 import (
 	"bytes"
 	"encoding/json"
+	"strconv"
 )
 
 // Confidence tags.
@@ -29,13 +30,17 @@ const (
 // Node is a graph node. Extra carries any additional attributes so round
 // trips of foreign graph.json files do not lose data.
 type Node struct {
-	ID             string         `json:"id"`
-	Label          string         `json:"label"`
-	FileType       string         `json:"file_type,omitempty"`
-	SourceFile     string         `json:"source_file"`
-	SourceLocation string         `json:"source_location,omitempty"`
-	Type           string         `json:"type,omitempty"`
-	Metadata       map[string]any `json:"metadata,omitempty"`
+	ID             string `json:"id"`
+	Label          string `json:"label"`
+	FileType       string `json:"file_type,omitempty"`
+	SourceFile     string `json:"source_file"`
+	SourceLocation string `json:"source_location,omitempty"`
+	// EndLine is the 1-based last line of the declaration SourceLocation
+	// starts, when the extractor knows it. It is what lets a reader take a
+	// symbol's whole body without guessing where it stops; 0 means unknown.
+	EndLine  int            `json:"end_line,omitempty"`
+	Type     string         `json:"type,omitempty"`
+	Metadata map[string]any `json:"metadata,omitempty"`
 	// MetaOrder lists metadata keys in insertion order when it matters for
 	// output parity; unlisted keys follow sorted.
 	MetaOrder []string `json:"-"`
@@ -257,4 +262,48 @@ func (e *Edge) SetMeta(k string, v any) {
 	}
 
 	e.Metadata[k] = v
+}
+
+// SetEndLine records where the declaration that starts at the node's
+// SourceLocation ends. A value that does not extend past the start line adds
+// nothing and is ignored, and an end already recorded is kept: the first
+// declaration of a reopened symbol is the one SourceLocation names.
+func (n *Node) SetEndLine(end int) *Node {
+	if n == nil || n.EndLine != 0 || end <= 0 {
+		return n
+	}
+	if start := locLine(n.SourceLocation); start == 0 || end <= start {
+		return n
+	}
+
+	n.EndLine = end
+
+	return n
+}
+
+// Span renders the node's location for people and agents: "L10-L24" when the
+// end is known, otherwise the stored location as is.
+func (n *Node) Span() string {
+	if n.EndLine > 0 && locLine(n.SourceLocation) > 0 {
+		return n.SourceLocation + "-L" + strconv.Itoa(n.EndLine)
+	}
+
+	return n.SourceLocation
+}
+
+// locLine parses the line of an "L<n>" location; 0 when it is not one.
+func locLine(loc string) int {
+	if len(loc) < 2 || loc[0] != 'L' {
+		return 0
+	}
+
+	line := 0
+	for _, c := range loc[1:] {
+		if c < '0' || c > '9' {
+			return 0
+		}
+		line = line*10 + int(c-'0')
+	}
+
+	return line
 }

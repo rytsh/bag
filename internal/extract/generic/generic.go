@@ -377,7 +377,7 @@ func run(cfg *Config, path, root string, tree *tsx.Tree) *model.Extraction {
 			classID := ids.MakeID(b.Stem, strings.Join(x.NamespaceStack, "."), className)
 			line := n.Line()
 			reopened := b.Has(classID)
-			b.AddNode(classID, className, line)
+			b.AddNode(classID, className, line).SetEndLine(n.EndLine())
 			x.MarkCallable(classID, true)
 
 			if cfg.ClassMeta != nil {
@@ -520,11 +520,11 @@ func (x *Ctx) WalkFunctionNamed(n *tsx.Node, parentClass, funcName string) strin
 
 	if parentClass != "" {
 		funcID = x.symbolID(ids.MakeID(parentClass, sanitized), sanitized)
-		b.AddNode(funcID, "."+funcName+paren, line)
+		b.AddNode(funcID, "."+funcName+paren, line).SetEndLine(n.EndLine())
 		b.AddEdge(parentClass, funcID, "method", line)
 	} else {
 		funcID = x.symbolID(ids.MakeID(b.Stem, sanitized), sanitized)
-		b.AddNode(funcID, funcName+paren, line)
+		b.AddNode(funcID, funcName+paren, line).SetEndLine(n.EndLine())
 		b.AddEdge(b.FileID, funcID, "contains", line)
 	}
 

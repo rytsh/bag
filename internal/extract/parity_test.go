@@ -21,9 +21,15 @@ type golden struct {
 	Edges [][]string `json:"edges"`
 }
 
+// The golden files were captured from Graphify and are now bag's regression
+// baselines: they pin node ids, labels, locations and edges. bag no longer
+// has to match Graphify, so an intended change updates the golden file in the
+// same commit. Declaration end lines are bag's own and are pinned separately
+// in testdata/end_lines_golden.json.
+
 // TestGraphifyParity builds testdata/fixtures and compares node ids/labels
-// and edge (source, target, relation, confidence) tuples with the graph
-// Graphify produced for the same files (testdata/graphify_golden.json).
+// and edge (source, target, relation, confidence) tuples with the baseline
+// in testdata/graphify_golden.json.
 func TestGraphifyParity(t *testing.T) {
 	// Known, documented divergence: Groovy uses gotreesitter's grammar shape,
 	// which differs from tree-sitter-groovy.
@@ -143,4 +149,72 @@ func extra(want [][]string, got map[string]bool) []string {
 	sort.Strings(out)
 
 	return out
+}
+
+// endLinesGolden is the path of the end-line baseline; UPDATE_GOLDEN=1
+// rewrites it from the current extraction.
+const endLinesGolden = "../../testdata/end_lines_golden.json"
+
+// TestEndLines pins the declaration end lines bag records for every corpus.
+// A start location is pinned by the parity tests; this pins where each
+// declaration stops, keyed by node id.
+func TestEndLines(t *testing.T) {
+	got := map[string]map[string]int{}
+
+	for _, dir := range []string{"fixtures", "resolve", "upstream", "frameworks"} {
+		root, _ := filepath.Abs(filepath.Join("../../testdata", dir))
+
+		det, err := detect.Detect(root, detect.Options{IsCode: extract.IsCode})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		res, err := extract.Run(context.Background(), det.Files[detect.Code], extract.Options{Root: root, Workers: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		ends := map[string]int{}
+		for _, n := range graph.Build(res.Nodes, res.Edges, nil, root).Nodes() {
+			if n.EndLine > 0 {
+				ends[n.ID] = n.EndLine
+			}
+		}
+		got[dir] = ends
+	}
+
+	if os.Getenv("UPDATE_GOLDEN") == "1" {
+		raw, err := json.MarshalIndent(got, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(endLinesGolden, append(raw, '\n'), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		return
+	}
+
+	raw, err := os.ReadFile(endLinesGolden)
+	if err != nil {
+		t.Fatalf("%v; run with UPDATE_GOLDEN=1 to create it", err)
+	}
+
+	var want map[string]map[string]int
+	if err := json.Unmarshal(raw, &want); err != nil {
+		t.Fatal(err)
+	}
+
+	for dir, ends := range want {
+		for id, end := range ends {
+			if got[dir][id] != end {
+				t.Errorf("%s: %s ends on %d, want %d", dir, id, got[dir][id], end)
+			}
+		}
+		for id, end := range got[dir] {
+			if _, ok := ends[id]; !ok {
+				t.Errorf("%s: %s gained end line %d not in the baseline", dir, id, end)
+			}
+		}
+	}
 }

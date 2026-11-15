@@ -4,11 +4,11 @@
 [![Coverage](https://img.shields.io/sonar/coverage/rytsh_bag?logo=sonarcloud&server=https%3A%2F%2Fsonarcloud.io&style=flat-square)](https://sonarcloud.io/summary/overall?id=rytsh_bag)
 
 `bag` turns a codebase (plus its docs, papers and images) into a **knowledge
-graph** you can explore locally or give to your AI coding assistant. It is a
-pure-Go reimplementation of
-[Graphify](https://github.com/Graphify-Labs/graphify): same `graph.json` schema,
-same node IDs, same confidence tags, so graphs are interchangeable between the
-two tools.
+graph** you can explore locally or give to your AI coding assistant. It began
+as a pure-Go port of [Graphify](https://github.com/Graphify-Labs/graphify) and
+keeps its `graph.json` layout, so tools written for one can mostly read the
+other, but it now goes its own way where that makes the graph more useful:
+for example, symbols carry the line their declaration ends on.
 
 - **Single static binary.** No Python, no CGo, no C toolchain. Tree-sitter runs
   through [gotreesitter](https://github.com/odvcencio/gotreesitter).
@@ -18,8 +18,10 @@ two tools.
   (OpenAI, Ollama, vLLM, LM Studio, …).
 - **Every edge is explained.** Each edge is tagged `EXTRACTED` (stated in the
   source), `INFERRED` (resolved by bag) or `AMBIGUOUS`.
-- **Many languages.** Dedicated extractors (ported from Graphify, output checked
-  against it) for Go, Python, JavaScript, TypeScript/TSX, Java, C, C++, C#,
+- **Whole symbols, not just where they start.** Functions, methods and types
+  record an `end_line`, so a reader can take a symbol's full body without
+  guessing where it stops.
+- **Many languages.** Dedicated extractors (many ported from Graphify) for Go, Python, JavaScript, TypeScript/TSX, Java, C, C++, C#,
   Kotlin, Scala, PHP, Ruby, Lua/Luau, Swift, Objective-C, Rust, Zig, Bash,
    Elixir, Julia, Astro, Solidity, VB.NET and Markdown, plus package manifests (`go.mod`,
   `pyproject.toml`, `Cargo.toml`, `pom.xml`). About 100 more languages are
@@ -85,11 +87,11 @@ bag explain RateLimiter
 bag update .                   # fast rebuild, reuses the per-file AST cache
 ```
 
-Output (same files as Graphify, under `.bag/` instead of `graphify-out/`):
+Output:
 
 ```
 .bag/
-├── graph.json        the full graph (Graphify node_link format)
+├── graph.json        the full graph (node_link format, Graphify-style)
 ├── GRAPH_REPORT.md   god nodes, communities, surprising connections, questions
 ├── graph.html        interactive vis-network view
 └── cache/            content-addressed AST (and LLM) cache
@@ -266,34 +268,23 @@ accepts are uploaded as-is; other containers and oversized files need
 `ffmpeg`, which is run as an external process (bag itself stays pure Go).
 Existing transcripts are reused; `--no-transcribe` skips the step.
 
-## Graphify compatibility
+## Graph format
 
-`bag` keeps Graphify's contracts:
+`graph.json` is `node_link_data` with `links`, in canonical key order and a
+stable sort. Every node has an `id`, a `label`, a `source_file` and, when it
+has one, a `source_location` (`L<line>`). Declarations that span lines also
+carry `end_line`, the 1-based line their declaration ends on; one-line
+declarations and signatures without a body (interface methods, abstract
+members) have none. Analysis adds `community`, `norm_label`, `_origin` and
+`confidence_score`.
 
-- **Node IDs.** The same `normalize_id`/`make_id` recipe (casefold + NFKC to a
-  fixpoint, Unicode `\w` runs), golden-tested against `graphify.ids`.
-- **graph.json.** `node_link_data` with `links`, canonical key order, stable
-  sort, `community`, `norm_label`, `_origin`, `confidence_score`.
-- **Resolution passes.** File-id canonicalization, collision salting,
-  header/impl class merging (C/C++/ObjC), unique-stub rewiring, cross-file
-  call resolution with import evidence, language family guards, Go/Java/PHP/
-  Python/C# type and import resolution, JS/TS symbol-level imports through
-  re-export barrels, receiver-typed member calls (TS/JS, C#, Swift, Ruby),
-  Python class/module-qualified calls, submodule imports, `__init__.py`
-  re-exports and the ambiguous-module guard, JS/TS and Python
-  `indirect_call` (callbacks, dispatch tables), dynamic `import()`,
-  receiver-typed member calls for C++, Objective-C, Java and Rust `self`,
-  Ruby inherited implicit-self promotion, `unresolved_calls` parking for
-  cross-repo merges, Kotlin/Elixir import targets and qualified calls, C#
-  interface dispatch (`dispatches_to`), config JSON (`package.json`,
-  `tsconfig.json`, ...) and MCP server configs.
-- **Deduplication.** Graphify's MinHash/LSH candidate stage is reproduced
-  bit-for-bit, so rationale/document/concept merges match.
-
-`testdata/graphify_golden.json` holds Graphify's output for
-`testdata/fixtures`, and `testdata/graphify_resolve_golden.json` for the
-multi-file `testdata/resolve` corpus; `go test ./internal/extract` fails if bag
-drifts from either. For any other directory, run `make parity DIR=path`.
+Node IDs follow Graphify's `normalize_id`/`make_id` recipe (casefold + NFKC to
+a fixpoint, Unicode `\w` runs), and the resolution and deduplication passes
+started as ports of Graphify's. bag no longer promises to match Graphify's
+output; it promises not to change its own without saying so. Golden files in
+`testdata/` pin node IDs, labels, locations and edges for several corpora, and
+`go test ./internal/extract` fails on any change to them that was not made on
+purpose.
 
 Known gaps are tracked in [ISSUES.md](ISSUES.md): very large minified JS
 bundles (a gotreesitter parser bug), a few Groovy constructs the reference

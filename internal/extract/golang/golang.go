@@ -311,7 +311,7 @@ func extract(path string, tree *tsx.Tree) *model.Extraction {
 			name := nameNode.Text()
 			line := n.Line()
 			id := symbolID(ids.MakeID(b.Stem, name), name)
-			b.AddNode(id, name+"()", line)
+			b.AddNode(id, name+"()", line).SetEndLine(n.EndLine())
 			b.AddEdge(b.FileID, id, "contains", line)
 			emitMethodRefs(n, id, line)
 
@@ -337,11 +337,11 @@ func extract(path string, tree *tsx.Tree) *model.Extraction {
 				parent := ids.MakeID(pkgScope, rt)
 				b.AddNode(parent, rt, line)
 				id = symbolID(ids.MakeID(parent, name), name)
-				b.AddNode(id, "."+name+"()", line)
+				b.AddNode(id, "."+name+"()", line).SetEndLine(n.EndLine())
 				b.AddEdge(parent, id, "method", line)
 			} else {
 				id = symbolID(ids.MakeID(b.Stem, name), name)
-				b.AddNode(id, name+"()", line)
+				b.AddNode(id, name+"()", line).SetEndLine(n.EndLine())
 				b.AddEdge(b.FileID, id, "contains", line)
 			}
 
@@ -534,7 +534,7 @@ func walkTypeSpec(
 	typeName := nameNode.Text()
 	line := spec.Line()
 	typeID := ids.MakeID(pkgScope, typeName)
-	b.AddNode(typeID, typeName, line)
+	b.AddNode(typeID, typeName, line).SetEndLine(spec.EndLine())
 	b.AddEdge(b.FileID, typeID, "contains", line)
 
 	body := spec.ChildOfType("struct_type", "interface_type")

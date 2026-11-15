@@ -102,10 +102,15 @@ func ExtractBash(path, _ string, src []byte) *model.Extraction {
 
 	meta := func(kind string) map[string]any { return map[string]any{"language": "bash", "kind": kind} }
 
-	addNode := func(id, label string, line int, kind string) {
+	addNode := func(id, label string, line int, kind string) *model.Node {
 		if id != "" && !b.Has(id) {
-			b.AddNode(id, label, line).Metadata = meta(kind)
+			n := b.AddNode(id, label, line)
+			n.Metadata = meta(kind)
+
+			return n
 		}
+
+		return b.Get(id)
 	}
 
 	addEdge := func(src, tgt, rel string, line int, conf, ctx string) *model.Edge {
@@ -241,7 +246,7 @@ func ExtractBash(path, _ string, src []byte) *model.Extraction {
 			}
 
 			fid := ids.MakeID(b.Stem, nm)
-			addNode(fid, nm+"()", n.Line(), "bash_function")
+			addNode(fid, nm+"()", n.Line(), "bash_function").SetEndLine(n.EndLine())
 			addEdge(parent, fid, "defines", n.Line(), "", "")
 
 			bd := n.ChildOfType("compound_statement")

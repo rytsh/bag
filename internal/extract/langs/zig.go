@@ -91,11 +91,11 @@ func ExtractZig(path, _ string, src []byte) *model.Extraction {
 
 			if parent != "" {
 				fid = ids.MakeID(parent, name)
-				b.AddNode(fid, "."+name+"()", line)
+				b.AddNode(fid, "."+name+"()", line).SetEndLine(n.EndLine())
 				b.AddEdge(parent, fid, "method", line)
 			} else {
 				fid = ids.MakeID(b.Stem, name)
-				b.AddNode(fid, name+"()", line)
+				b.AddNode(fid, name+"()", line).SetEndLine(n.EndLine())
 				b.AddEdge(b.FileID, fid, "contains", line)
 			}
 
@@ -124,7 +124,7 @@ func ExtractZig(path, _ string, src []byte) *model.Extraction {
 			case "struct_declaration", "enum_declaration", "union_declaration":
 				if nameNode != nil {
 					id := ids.MakeID(b.Stem, nameNode.Text())
-					b.AddNode(id, nameNode.Text(), n.Line())
+					b.AddNode(id, nameNode.Text(), n.Line()).SetEndLine(n.EndLine())
 					b.AddEdge(b.FileID, id, "contains", n.Line())
 
 					for _, c := range value.Children() {

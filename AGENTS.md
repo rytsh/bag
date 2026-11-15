@@ -4,10 +4,16 @@ Guidance for AI agents working on this repository.
 
 ## What this is
 
-`bag` is a pure-Go, Graphify-compatible code knowledge-graph builder. The
-contract is **byte-level compatibility with Graphify's graph.json and node
-IDs**. Many functions are adapted from Graphify's Python sources; keep the
-behaviour identical unless there is a deliberate, documented reason.
+`bag` is a pure-Go code knowledge-graph builder. It started as a port of
+Graphify and much of its code is adapted from Graphify's Python sources, but
+it is its own tool now: Graphify compatibility is **not** a requirement. Change
+the graph whenever that makes it more useful to the people and agents reading
+it, and say so in the change.
+
+What stays stable is bag's own contract with its consumers: node IDs, the
+`graph.json` keys they already read, and edge relations. Adding a key is
+fine; renaming or removing one, or changing how IDs are made, is a breaking
+change and needs a major version.
 
 ## Rules
 
@@ -20,15 +26,24 @@ behaviour identical unless there is a deliberate, documented reason.
 - A new language needs one extractor (`internal/extract/langs/<lang>.go`),
   registration in `langs.go` and fixtures. Prefer the generic engine
   (`internal/extract/generic`) with hooks over a bespoke walker.
-- When porting Graphify logic, note the source function in the doc comment
-  ("Adapted from Graphify's X (Apache-2.0)").
+- Code adapted from Graphify keeps its attribution in the doc comment
+  ("Adapted from Graphify's X (Apache-2.0)"); that is a licence obligation,
+  not a promise to behave the same.
+- Bump `store.ASTVersion` whenever extractor output changes, so cached
+  extractions and consumers that record the engine version rebuild.
 - Wrap errors with `fmt.Errorf("...; %w", err)`.
 
-## Checking parity
+## Regression baselines
 
 ```sh
-go test ./...                       # includes the Graphify golden parity test
-make parity DIR=/path/to/project    # needs `graphify` installed
+go test ./...                       # includes the golden extraction tests
 ```
 
-`scripts/compare.py` prints node/edge set differences per file extension.
+`testdata/*_golden.json` were captured from Graphify and now serve as bag's
+regression baselines: they catch an unintended change to node IDs, labels,
+locations or edges. An intended change updates the golden file in the same
+commit, with the reason in the message.
+
+`make parity DIR=path` (needs `graphify` installed) is still there for
+comparing against Graphify out of interest; a difference it reports is not
+a bug by itself.

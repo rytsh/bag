@@ -264,7 +264,7 @@ func newMCPServer(store *Store, version string, allowBuild bool) *mcp.Server {
 			lines := []string{fmt.Sprintf("Community %d %q (%d nodes):", a.CommunityID, l.Labels[a.CommunityID], len(ms))}
 			for _, m := range sorted {
 				n := l.G.Node(m)
-				lines = append(lines, fmt.Sprintf("- %s [%s %s] degree=%d", n.Label, n.SourceFile, n.SourceLocation, l.G.Degree(m)))
+				lines = append(lines, fmt.Sprintf("- %s [%s %s] degree=%d", n.Label, n.SourceFile, n.Span(), l.G.Degree(m)))
 			}
 
 			return text(truncate(strings.Join(lines, "\n"), budget(a.TokenBudget, 2000)))

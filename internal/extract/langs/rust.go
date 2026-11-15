@@ -247,11 +247,11 @@ func ExtractRust(path, _ string, src []byte) *model.Extraction {
 
 			if impl != "" {
 				fid = ids.MakeID(impl, name)
-				b.AddNode(fid, "."+name+"()", line)
+				b.AddNode(fid, "."+name+"()", line).SetEndLine(n.EndLine())
 				b.AddEdge(impl, fid, "method", line)
 			} else {
 				fid = ids.MakeID(b.Stem, name)
-				b.AddNode(fid, name+"()", line)
+				b.AddNode(fid, name+"()", line).SetEndLine(n.EndLine())
 				b.AddEdge(b.FileID, fid, "contains", line)
 			}
 
@@ -277,7 +277,7 @@ func ExtractRust(path, _ string, src []byte) *model.Extraction {
 
 			line := n.Line()
 			item := ids.MakeID(b.Stem, nn.Text())
-			b.AddNode(item, nn.Text(), line).RustDeclCount++
+			b.AddNode(item, nn.Text(), line).SetEndLine(n.EndLine()).RustDeclCount++
 			b.AddEdge(b.FileID, item, "contains", line)
 
 			switch t {
@@ -388,11 +388,11 @@ func ExtractRust(path, _ string, src []byte) *model.Extraction {
 
 			if impl != "" {
 				item = ids.MakeID(impl, nn.Text())
-				b.AddNode(item, "."+nn.Text(), line)
+				b.AddNode(item, "."+nn.Text(), line).SetEndLine(n.EndLine())
 				b.AddEdge(impl, item, "contains", line)
 			} else {
 				item = ids.MakeID(b.Stem, nn.Text())
-				b.AddNode(item, nn.Text(), line)
+				b.AddNode(item, nn.Text(), line).SetEndLine(n.EndLine())
 				b.AddEdge(b.FileID, item, "contains", line)
 			}
 
