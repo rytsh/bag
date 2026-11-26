@@ -91,6 +91,27 @@ func ToObsidian(g *graph.Graph, c graph.Communities, labels map[int]string, outD
 		names[id] = base
 	}
 
+	// Community notes get unique file names too: labels repeat across
+	// communities (two "New" hubs), and two notes on one path would leave
+	// whichever was written last.
+	cids := make([]int, 0, len(c))
+	for cid := range c {
+		cids = append(cids, cid)
+	}
+	sort.Ints(cids)
+
+	commName := map[int]string{}
+	usedComm := map[string]int{}
+	for _, cid := range cids {
+		base := "_COMMUNITY_" + obsidianName(label(cid))
+		key := strings.ToLower(base)
+		usedComm[key]++
+		if usedComm[key] > 1 {
+			base = fmt.Sprintf("%s (%d)", base, usedComm[key])
+		}
+		commName[cid] = base
+	}
+
 	count := 0
 
 	for _, id := range ids {
@@ -117,7 +138,7 @@ func ToObsidian(g *graph.Graph, c graph.Communities, labels map[int]string, outD
 		}
 
 		if cid, ok := nc[id]; ok {
-			L = append(L, fmt.Sprintf("Community: [[_COMMUNITY_%s|%s]]", obsidianName(label(cid)), label(cid)), "")
+			L = append(L, fmt.Sprintf("Community: [[%s|%s]]", commName[cid], label(cid)), "")
 		}
 
 		byRel := map[string][]string{}
@@ -162,7 +183,9 @@ func ToObsidian(g *graph.Graph, c graph.Communities, labels map[int]string, outD
 		count++
 	}
 
-	for cid, ms := range c {
+	for _, cid := range cids {
+		ms := c[cid]
+
 		var L []string
 
 		L = append(L, "# "+label(cid), "", fmt.Sprintf("%d members", len(ms)), "")
@@ -176,7 +199,7 @@ func ToObsidian(g *graph.Graph, c graph.Communities, labels map[int]string, outD
 			}
 		}
 
-		f := filepath.Join(outDir, "_COMMUNITY_"+obsidianName(label(cid))+".md")
+		f := filepath.Join(outDir, commName[cid]+".md")
 		if err := graph.WriteFileAtomic(f, []byte(strings.Join(L, "\n"))); err != nil {
 			return count, err
 		}

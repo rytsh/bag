@@ -170,6 +170,15 @@ func (u *unionFind) union(x, y string) {
 
 // DedupeEntities merges near-identical non-code nodes and rewires edges.
 func DedupeEntities(nodes []*model.Node, edges []*model.Edge) ([]*model.Node, []*model.Edge) {
+	n, e, _ := dedupeEntities(nodes, edges)
+
+	return n, e
+}
+
+// dedupeEntities is DedupeEntities that also returns which node ids were
+// merged into which, so references outside edges (hyperedge members) can
+// follow them.
+func dedupeEntities(nodes []*model.Node, edges []*model.Edge) ([]*model.Node, []*model.Edge, map[string]string) {
 	uf := &unionFind{parent: map[string]string{}}
 
 	byNorm := map[string][]*model.Node{}
@@ -290,7 +299,7 @@ func DedupeEntities(nodes []*model.Node, edges []*model.Edge) ([]*model.Node, []
 	}
 
 	if merges == 0 {
-		return nodes, edges
+		return nodes, edges, nil
 	}
 
 	groups := map[string][]*model.Node{}
@@ -352,7 +361,7 @@ func DedupeEntities(nodes []*model.Node, edges []*model.Edge) ([]*model.Node, []
 		outEdges = append(outEdges, e)
 	}
 
-	return outNodes, outEdges
+	return outNodes, outEdges, remap
 }
 
 func labelOr(n *model.Node) string {

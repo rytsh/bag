@@ -54,6 +54,10 @@ type Node struct {
 	// Internal extraction markers (not written to graph.json).
 	Callable      bool `json:"-"`
 	CallableClass bool `json:"-"`
+	// GoReceiver marks the node a Go file mints for the receiver type of its
+	// methods when the type itself is declared in another file of the
+	// package. The cross-file pass folds it into that declaration.
+	GoReceiver bool `json:"-"`
 	// TopModule marks a top-level Elixir module/protocol, the only safe
 	// cross-file import target.
 	TopModule bool `json:"-"`
@@ -160,10 +164,13 @@ type Extraction struct {
 
 	// Language-specific side tables consumed by resolvers.
 	GoImports map[string]string
+	// GoTypeParams names the type parameters a Go file declares; a reference
+	// to one is not a reference to a package type of the same name.
+	GoTypeParams map[string]bool
 	// TypeTable maps receiver names (fields, params, locals) to their
 	// declared type for the receiver-typed member-call resolvers.
 	TypeTable map[string]string
-	// Package is the file's declared package (Kotlin).
+	// Package is the file's declared package (Kotlin, Go).
 	Package string
 	// Factory holds pending `x = Factory.make()` receiver bindings (Swift).
 	Factory map[string][2]string
@@ -173,6 +180,9 @@ type Extraction struct {
 
 	Error       string
 	ParseErrors bool
+	// ParseStop is why the parser stopped before the end of the file
+	// ("timeout", ...); the extraction is then partial.
+	ParseStop string
 	// Skipped marks files an extractor declined by design (not a failure).
 	Skipped bool
 }

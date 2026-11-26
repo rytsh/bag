@@ -98,3 +98,12 @@ func TestInstallMCPPreflightsConflicts(t *testing.T) {
 		}
 	}
 }
+
+// The hook names the binary in single quotes: in double quotes a $ or a
+// backtick in its path would be expanded by the shell.
+func TestHookQuotesTheBinaryForTheShell(t *testing.T) {
+	body := hookBody("/opt/$(touch x)/`id`/it's/bag")
+	if !strings.Contains(body, `'/opt/$(touch x)/`+"`id`"+`/it'\''s/bag' update`) {
+		t.Errorf("hook body:\n%s", body)
+	}
+}

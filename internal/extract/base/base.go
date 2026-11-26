@@ -111,7 +111,7 @@ func (b *Builder) AddNode(id, label string, line int) *model.Node {
 
 	n := &model.Node{
 		ID:             id,
-		Label:          label,
+		Label:          strings.ToValidUTF8(label, "\uFFFD"),
 		FileType:       model.FileTypeCode,
 		SourceFile:     b.Path,
 		SourceLocation: Loc(line),
@@ -134,7 +134,7 @@ func (b *Builder) AddStub(id, label string) *model.Node {
 
 	n := &model.Node{
 		ID:            id,
-		Label:         label,
+		Label:         strings.ToValidUTF8(label, "\uFFFD"),
 		FileType:      model.FileTypeCode,
 		OriginFile:    b.Path,
 		EmptyLocation: true,

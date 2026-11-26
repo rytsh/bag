@@ -7,6 +7,7 @@ import (
 	"crypto/sha1" //nolint:gosec // non-cryptographic salt, mirrors Graphify
 	"encoding/hex"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -120,11 +121,39 @@ func extract(path string, tree *tsx.Tree) *model.Extraction {
 
 	b.AddFileNode()
 
-	ensureNamed := func(name string) string { return b.EnsureNamed(pkgScope, name) }
+	ensureNamed := func(name string) string {
+		// A qualified reference (manager.Manager) is resolved across files
+		// by resolveGoTypeReferences. Its bare-name id would be the very id
+		// of type Manager in a manager/ directory, so two different things
+		// would share an id until then and the type would be salted.
+		if strings.Contains(name, ".") {
+			id := ids.MakeID("go", "ref", name)
+			if !b.Has(id) {
+				b.AddStub(id, name)
+			}
+
+			return id
+		}
+
+		return b.EnsureNamed(pkgScope, name)
+	}
 
 	emitMethodRefs := func(fn *tsx.Node, fnID string, line int) {
+		// A function's own type parameters (`func Map[Node any](n Node)`)
+		// shadow package types of the same name and are not references.
+		params := map[string]bool{}
+		if tp := fn.Field("type_parameters"); tp != nil {
+			for name := range goTypeParams(tp) {
+				params[name] = true
+			}
+		}
+
 		emit := func(refs []typeRef, def string) {
 			for _, r := range refs {
+				if params[r.name] {
+					continue
+				}
+
 				ctx := def
 				if r.role == "generic_arg" {
 					ctx = "generic_arg"
@@ -189,7 +218,13 @@ func extract(path string, tree *tsx.Tree) *model.Extraction {
 		for _, p := range recv.Children() {
 			if p.Type() == "parameter_declaration" {
 				if tn := p.Field("type"); tn != nil {
-					return strings.TrimSpace(strings.TrimLeft(tn.Text(), "*"))
+					rt := strings.TrimSpace(strings.TrimLeft(tn.Text(), "*"))
+					// A generic receiver (Set[T]) names the type Set.
+					if i := strings.IndexByte(rt, '['); i > 0 {
+						rt = strings.TrimSpace(rt[:i])
+					}
+
+					return rt
 				}
 
 				break
@@ -289,7 +324,7 @@ func extract(path string, tree *tsx.Tree) *model.Extraction {
 		tgt := ids.MakeID("go", "pkg", raw)
 		b.AddEdgeCtx(b.FileID, tgt, "imports_from", spec.Line(), "import")
 
-		local := raw[strings.LastIndexByte(raw, '/')+1:]
+		local := goImportName(raw)
 		if alias := spec.Field("name"); alias != nil {
 			local = alias.Text()
 		}
@@ -335,7 +370,12 @@ func extract(path string, tree *tsx.Tree) *model.Extraction {
 
 			if rt != "" {
 				parent := ids.MakeID(pkgScope, rt)
-				b.AddNode(parent, rt, line)
+				if !b.Has(parent) {
+					// The type may be declared further down this file, or
+					// in another file of the package; walkTypeSpec and
+					// mergeGoReceivers settle which.
+					b.AddNode(parent, rt, line).GoReceiver = true
+				}
 				id = symbolID(ids.MakeID(parent, name), name)
 				b.AddNode(id, "."+name+"()", line).SetEndLine(n.EndLine())
 				b.AddEdge(parent, id, "method", line)
@@ -514,8 +554,85 @@ func extract(path string, tree *tsx.Tree) *model.Extraction {
 
 	res := b.Result()
 	res.GoImports = imported
+	res.GoTypeParams = goTypeParams(root)
+
+	for _, c := range root.Children() {
+		if c.Type() == "package_clause" {
+			if id := c.ChildOfType("package_identifier"); id != nil {
+				res.Package = id.Text()
+			}
+
+			break
+		}
+	}
 
 	return res
+}
+
+// goImportName guesses the package name an unaliased import path binds. The
+// go tool does not tie a package's name to its path, but nearly every module
+// follows the conventions handled here: a major version directory is not the
+// name (github.com/x/foo/v2 -> foo), nor is a gopkg.in version suffix
+// (gopkg.in/yaml.v3 -> yaml); a "go-" prefix or "-go"/".go" suffix is dropped
+// (go-redis -> redis), and so are the dashes Go identifiers cannot have.
+func goImportName(importPath string) string {
+	parts := strings.Split(importPath, "/")
+	last := parts[len(parts)-1]
+
+	if len(parts) > 1 && isMajorVersion(last) {
+		last = parts[len(parts)-2]
+	}
+
+	if i := strings.LastIndex(last, ".v"); i > 0 && isMajorVersion(last[i+1:]) {
+		last = last[:i]
+	}
+
+	last = strings.TrimPrefix(last, "go-")
+	last = strings.TrimSuffix(last, "-go")
+	last = strings.TrimSuffix(last, ".go")
+
+	return strings.ReplaceAll(last, "-", "")
+}
+
+// isMajorVersion reports whether s is a module major version element: "v2"
+// and up.
+func isMajorVersion(s string) bool {
+	if len(s) < 2 || s[0] != 'v' {
+		return false
+	}
+
+	n, err := strconv.Atoi(s[1:])
+
+	return err == nil && n >= 2
+}
+
+// goTypeParams collects the names of every type parameter declared in the
+// file, on functions and on types (`func F[Node any]`, `type Set[T any]`).
+func goTypeParams(root *tsx.Node) map[string]bool {
+	var out map[string]bool
+
+	var walk func(n *tsx.Node)
+	walk = func(n *tsx.Node) {
+		if n.Type() == "type_parameter_declaration" {
+			for _, c := range n.Children() {
+				if c.Type() == "identifier" || c.Type() == "type_identifier" {
+					if out == nil {
+						out = map[string]bool{}
+					}
+					out[c.Text()] = true
+				}
+			}
+
+			return
+		}
+
+		for _, c := range n.Children() {
+			walk(c)
+		}
+	}
+	walk(root)
+
+	return out
 }
 
 func walkTypeSpec(
@@ -534,7 +651,14 @@ func walkTypeSpec(
 	typeName := nameNode.Text()
 	line := spec.Line()
 	typeID := ids.MakeID(pkgScope, typeName)
-	b.AddNode(typeID, typeName, line).SetEndLine(spec.EndLine())
+	n := b.AddNode(typeID, typeName, line)
+	if n.GoReceiver {
+		// A method above the declaration minted this node at the method's
+		// line; the declaration is the type's real location.
+		n.GoReceiver = false
+		n.SourceLocation = base.Loc(line)
+	}
+	n.SetEndLine(spec.EndLine())
 	b.AddEdge(b.FileID, typeID, "contains", line)
 
 	body := spec.ChildOfType("struct_type", "interface_type")

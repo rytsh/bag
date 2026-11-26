@@ -3442,13 +3442,13 @@
 ],
 [
 "sample_rb_sample_apiclient_get",
-"sample_timeoutapiclient_fetch",
+"sample_rb_sample_apiclient_fetch",
 "calls",
 "EXTRACTED"
 ],
 [
 "sample_rb_sample_apiclient_post",
-"sample_timeoutapiclient_fetch",
+"sample_rb_sample_apiclient_fetch",
 "calls",
 "EXTRACTED"
 ],

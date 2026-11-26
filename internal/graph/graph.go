@@ -16,6 +16,8 @@ type Graph struct {
 	nodes map[string]*model.Node
 	order []string
 	adj   map[string]map[string]*model.Edge
+	// edgeCount is the number of distinct edges (node pairs) in adj.
+	edgeCount int
 
 	Hyperedges []*model.Hyperedge
 	Meta       map[string]any
@@ -47,7 +49,10 @@ func (g *Graph) RemoveNode(id string) {
 	}
 
 	for nb := range g.adj[id] {
-		delete(g.adj[nb], id)
+		if nb != id {
+			delete(g.adj[nb], id)
+		}
+		g.edgeCount--
 	}
 
 	delete(g.adj, id)
@@ -90,6 +95,10 @@ func (g *Graph) NumNodes() int { return len(g.nodes) }
 
 // SetEdge sets (replaces) the edge between e.Source and e.Target.
 func (g *Graph) SetEdge(e *model.Edge) {
+	if _, ok := g.adj[e.Source][e.Target]; !ok {
+		g.edgeCount++
+	}
+
 	g.adj[e.Source][e.Target] = e
 	g.adj[e.Target][e.Source] = e
 }
@@ -130,14 +139,16 @@ func (g *Graph) Degree(id string) int {
 	return d
 }
 
-// Edges returns every edge once.
+// Edges returns every edge once, in a stable order: by node insertion order,
+// then by neighbour id. Map order would otherwise reach every output that
+// does not sort for itself (reports, exports, questions).
 func (g *Graph) Edges() []*model.Edge {
-	seen := map[*model.Edge]bool{}
-
-	var out []*model.Edge
+	seen := make(map[*model.Edge]bool, g.edgeCount)
+	out := make([]*model.Edge, 0, g.edgeCount)
 
 	for _, u := range g.order {
-		for _, e := range g.adj[u] {
+		for _, nb := range g.Neighbors(u) {
+			e := g.adj[u][nb]
 			if !seen[e] {
 				seen[e] = true
 				out = append(out, e)
@@ -149,14 +160,14 @@ func (g *Graph) Edges() []*model.Edge {
 }
 
 // NumEdges returns the edge count.
-func (g *Graph) NumEdges() int { return len(g.Edges()) }
+func (g *Graph) NumEdges() int { return g.edgeCount }
 
-// InEdges returns edges whose true target is id.
+// InEdges returns edges whose true target is id, ordered by neighbour id.
 func (g *Graph) InEdges(id string) []*model.Edge {
 	var out []*model.Edge
 
-	for _, e := range g.adj[id] {
-		if e.Target == id {
+	for _, nb := range g.Neighbors(id) {
+		if e := g.adj[id][nb]; e.Target == id {
 			out = append(out, e)
 		}
 	}
@@ -164,12 +175,12 @@ func (g *Graph) InEdges(id string) []*model.Edge {
 	return out
 }
 
-// OutEdges returns edges whose true source is id.
+// OutEdges returns edges whose true source is id, ordered by neighbour id.
 func (g *Graph) OutEdges(id string) []*model.Edge {
 	var out []*model.Edge
 
-	for _, e := range g.adj[id] {
-		if e.Source == id {
+	for _, nb := range g.Neighbors(id) {
+		if e := g.adj[id][nb]; e.Source == id {
 			out = append(out, e)
 		}
 	}

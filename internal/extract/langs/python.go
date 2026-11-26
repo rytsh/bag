@@ -616,7 +616,7 @@ func pyNested(x *generic.Ctx, container *tsx.Node, parent string) {
 
 		name := nn.Text()
 		id := ids.MakeID(parent, name)
-		x.B.AddNode(id, name+"()", target.Line())
+		x.B.AddNode(id, name+"()", target.Line()).SetEndLine(target.EndLine())
 		x.B.AddEdge(parent, id, "contains", target.Line())
 		x.MarkCallable(id, false)
 		x.LocalNames[id] = pyLocalNames(target)

@@ -407,10 +407,22 @@ func ExtractRust(path, _ string, src []byte) *model.Extraction {
 
 			if tn != nil {
 				typeName := strings.TrimSpace(tn.Text())
-				implID = ids.MakeID(b.Stem, typeName)
-				b.AddNode(implID, typeName, n.Line())
-				implKey = rustSimpleGenericImplKey(n)
 				selfType = strings.TrimSpace(strings.SplitN(typeName, "<", 2)[0])
+				// The impl block is the type: impl<T> Point<T> and impl
+				// Display for Point<i32> both add to Point, the struct or
+				// enum declared under that name, instead of minting a
+				// "Point<T>" node per block that the struct never owns.
+				implID = ids.MakeID(b.Stem, selfType)
+				node := b.AddNode(implID, selfType, n.Line())
+				if node.Label == selfType && typeName != selfType {
+					if node.Metadata == nil {
+						node.Metadata = map[string]any{}
+					}
+					if _, ok := node.Metadata["generic_impl"]; !ok {
+						node.Metadata["generic_impl"] = typeName
+					}
+				}
+				implKey = rustSimpleGenericImplKey(n)
 			}
 
 			if trait != nil && implID != "" {
@@ -488,8 +500,79 @@ func ExtractRust(path, _ string, src []byte) *model.Extraction {
 	walk(tree.Root, "")
 
 	labelToID := map[string]string{}
+	// byOwner maps a bare name to its definitions by owner: "" for a free
+	// function, the impl's type id for a method. A call is bound only where
+	// that is unambiguous; the rest goes to cross-file resolution.
+	byOwner := map[string]map[string][]string{}
+	ownerOf := map[string]string{}
+	for _, e := range b.Edges {
+		if e.Relation == "method" {
+			ownerOf[e.Target] = e.Source
+		}
+	}
 	for _, n := range b.Nodes {
-		labelToID[strings.TrimLeft(strings.Trim(n.Label, "()"), ".")] = n.ID
+		norm := strings.TrimLeft(strings.Trim(n.Label, "()"), ".")
+		labelToID[norm] = n.ID
+		if n.SourceFile == "" || !strings.HasSuffix(n.Label, "()") {
+			continue
+		}
+		if byOwner[norm] == nil {
+			byOwner[norm] = map[string][]string{}
+		}
+		byOwner[norm][ownerOf[n.ID]] = append(byOwner[norm][ownerOf[n.ID]], n.ID)
+	}
+
+	// bind picks the in-file definition a call names, or "".
+	bind := func(callee string, member, scoped, selfCall bool, fn *tsx.Node, caller string) string {
+		owners, ok := byOwner[callee]
+		if !ok {
+			// Not a function here: a constructor-like tuple struct call
+			// (Point(1, 2)) still names the type.
+			if !member && !scoped {
+				return labelToID[callee]
+			}
+
+			return ""
+		}
+
+		one := func(ids []string) string {
+			if len(ids) == 1 {
+				return ids[0]
+			}
+
+			return ""
+		}
+
+		switch {
+		case selfCall:
+			return one(owners[ownerOf[caller]])
+		case scoped:
+			// Type::f() or Self::f(): the path names the owner.
+			path := fn.Field("path")
+			if path == nil {
+				return ""
+			}
+
+			typ := strings.TrimSpace(strings.SplitN(path.Text(), "<", 2)[0])
+			if typ == "Self" {
+				return one(owners[ownerOf[caller]])
+			}
+
+			return one(owners[ids.MakeID(b.Stem, lastSeg(typ, "::"))])
+		case member:
+			// value.f(): without the value's type only a single method of
+			// that name in the file is a safe guess, never a free function.
+			var all []string
+			for owner, list := range owners {
+				if owner != "" {
+					all = append(all, list...)
+				}
+			}
+
+			return one(all)
+		default:
+			return one(owners[""])
+		}
 	}
 
 	seen := map[[2]string]bool{}
@@ -526,7 +609,7 @@ func ExtractRust(path, _ string, src []byte) *model.Extraction {
 			}
 
 			if callee != "" && !base.BuiltinGlobals.Has(callee) {
-				tgt := labelToID[callee]
+				tgt := bind(callee, member, scoped, selfCall, fn, caller)
 
 				switch {
 				case tgt != "" && tgt != caller:

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf16"
+	"unicode/utf8"
 
 	"golang.org/x/text/unicode/norm"
 
@@ -260,6 +262,29 @@ func WriteFileAtomic(path string, data []byte) error {
 		return fmt.Errorf("write temp file; %w", err)
 	}
 
+	// CreateTemp makes the file owner-only (0600), and the rename would carry
+	// that over: graph.json and the reports must stay readable by the other
+	// tools, containers and teammates that read them, as os.WriteFile left
+	// them. An existing file keeps its own mode.
+	mode := os.FileMode(0o644)
+	if fi, err := os.Stat(path); err == nil {
+		mode = fi.Mode().Perm()
+	}
+
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+
+		return fmt.Errorf("chmod temp file; %w", err)
+	}
+
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+
+		return fmt.Errorf("sync temp file; %w", err)
+	}
+
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmp.Name())
 
@@ -379,6 +404,14 @@ func sortBySortedJSON(items []orderedMap) {
 
 // pyLess compares strings by code point like Python.
 func pyLess(a, b string) bool {
+	// Python compares strings by code point. For valid UTF-8 the byte order
+	// is the same, and comparing bytes allocates nothing; sorting every node
+	// and link of a large graph converted both strings to runes on each
+	// comparison.
+	if utf8.ValidString(a) && utf8.ValidString(b) {
+		return a < b
+	}
+
 	ra, rb := []rune(a), []rune(b)
 	for i := 0; i < len(ra) && i < len(rb); i++ {
 		if ra[i] != rb[i] {
@@ -598,6 +631,12 @@ func writeScalar(b *bytes.Buffer, v any, ascii bool) {
 
 // pyFloat formats like Python's repr(float).
 func pyFloat(f float64) string {
+	// JSON has no NaN or infinity; a score an LLM produced as either is
+	// written as null rather than an invalid document.
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return "null"
+	}
+
 	if f == float64(int64(f)) && f < 1e16 && f > -1e16 {
 		return strconv.FormatFloat(f, 'f', 1, 64)
 	}

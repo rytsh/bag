@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -135,15 +137,37 @@ func text(s string) (*mcp.CallToolResult, any, error) {
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: s}}}, nil, nil
 }
 
+// Bounds on caller-supplied query sizes. A token budget is multiplied into a
+// byte count, so an unbounded one overflows; a depth is a loop count.
+const (
+	maxTokenBudget = 200_000
+	maxDepth       = 6
+)
+
 func budget(v, def int) int {
-	if v <= 0 {
+	switch {
+	case v <= 0:
 		return def
+	case v > maxTokenBudget:
+		return maxTokenBudget
+	}
+
+	return v
+}
+
+func depthArg(v, def int) int {
+	switch {
+	case v <= 0:
+		return def
+	case v > maxDepth:
+		return maxDepth
 	}
 
 	return v
 }
 
 func truncate(s string, tokens int) string {
+	tokens = budget(tokens, maxTokenBudget)
 	if len(s) <= tokens*3 {
 		return s
 	}
@@ -164,6 +188,20 @@ func NewMCPServer(store *Store, version string) *mcp.Server {
 
 func newMCPServer(store *Store, version string, allowBuild bool) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "bag", Version: version}, nil)
+	// A tool that panics must fail its own call, not take down a stdio
+	// server every other call of the session goes through.
+	s.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (res mcp.Result, err error) {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("mcp handler panicked", "method", method, "panic", r, "stack", string(debug.Stack()))
+					res, err = nil, fmt.Errorf("internal error in %s: %v", method, r)
+				}
+			}()
+
+			return next(ctx, method, req)
+		}
+	})
 	s.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 			if method == "tools/call" {
@@ -194,7 +232,7 @@ func newMCPServer(store *Store, version string, allowBuild bool) *mcp.Server {
 			_, e := store.Get()
 
 			return text(e.Query(a.Question, query.Options{
-				Depth: budget(a.Depth, 3), DFS: strings.EqualFold(a.Mode, "dfs"), Budget: budget(a.TokenBudget, 2000),
+				Depth: depthArg(a.Depth, 3), DFS: strings.EqualFold(a.Mode, "dfs"), Budget: budget(a.TokenBudget, 2000),
 			}))
 		})
 
@@ -293,7 +331,7 @@ func newMCPServer(store *Store, version string, allowBuild bool) *mcp.Server {
 		func(_ context.Context, _ *mcp.CallToolRequest, a pathArgs) (*mcp.CallToolResult, any, error) {
 			_, e := store.Get()
 
-			return text(e.Path(a.Source, a.Target))
+			return text(e.PathWithin(a.Source, a.Target, budget(a.MaxHops, 8)))
 		})
 
 	addResources(s, store)
@@ -348,7 +386,7 @@ func addResources(s *mcp.Server, store *Store) {
 		return strings.Join(lines, "\n")
 	})
 	res("graphify://report", "Graph Report", "Full GRAPH_REPORT.md", "text/markdown", func(_ *graph.Loaded) string {
-		raw, err := os.ReadFile(strings.TrimSuffix(store.path, "graph.json") + "GRAPH_REPORT.md")
+		raw, err := os.ReadFile(filepath.Join(filepath.Dir(store.path), "GRAPH_REPORT.md"))
 		if err != nil {
 			return "GRAPH_REPORT.md not found; run `bag extract` or `bag cluster-only`."
 		}

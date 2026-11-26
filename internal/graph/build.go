@@ -34,7 +34,9 @@ var (
 // Build merges extractions into a graph (Graphify's build + build_from_json).
 func Build(nodes []*model.Node, edges []*model.Edge, hyper []*model.Hyperedge, root string) *Graph {
 	nodes = dedupeNodes(nodes, root)
-	nodes, edges = DedupeEntities(nodes, edges)
+
+	var merged map[string]string
+	nodes, edges, merged = dedupeEntities(nodes, edges)
 
 	g := New()
 
@@ -82,6 +84,12 @@ func Build(nodes []*model.Node, edges []*model.Edge, hyper []*model.Hyperedge, r
 		suffix := ""
 		if n.Label != path.Base(sf) && strings.HasPrefix(norm, newStem) {
 			suffix = norm[len(newStem):]
+			// A legacy file stem names the file. A symbol whose id is
+			// exactly the stem (Go type Cart in cart/cart.go, beside the
+			// file node cart_cart_go) must not claim it.
+			if suffix == "" {
+				continue
+			}
 		}
 
 		for _, old := range oldFileStems(sf) {
@@ -190,6 +198,15 @@ func Build(nodes []*model.Node, edges []*model.Edge, hyper []*model.Hyperedge, r
 				continue
 			}
 
+			// One edge is kept per node pair. Containment is already implied
+			// by where a declaration is, so it never replaces a relation that
+			// says more: a nested class extending the class it is declared in
+			// (sealed hierarchies), a function calling the local function it
+			// declares.
+			if edge.Relation == "contains" && ex.Relation != "contains" && !genericRelations.Has(ex.Relation) {
+				continue
+			}
+
 			if ex.Relation == edge.Relation {
 				er, ir := confidenceRank[ex.Confidence], confidenceRank[edge.Confidence]
 				if er > ir {
@@ -219,12 +236,20 @@ func Build(nodes []*model.Node, edges []*model.Edge, hyper []*model.Hyperedge, r
 	for _, he := range hyper {
 		var members []string
 
+		seen := map[string]bool{}
+
 		for _, m := range he.Nodes {
+			// A member merged into a duplicate is that duplicate now.
+			if v, ok := merged[m]; ok {
+				m = v
+			}
+
 			if !g.Has(m) {
 				m = normToID[ids.NormalizeID(m)]
 			}
 
-			if m != "" && g.Has(m) {
+			if m != "" && g.Has(m) && !seen[m] {
+				seen[m] = true
 				members = append(members, m)
 			}
 		}

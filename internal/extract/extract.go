@@ -7,13 +7,18 @@ package extract
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/rytsh/bag/internal/extract/base"
+	"github.com/rytsh/bag/internal/extract/tsx"
 	"github.com/rytsh/bag/internal/model"
 )
 
@@ -139,7 +144,7 @@ func Run(ctx context.Context, paths []string, opt Options) (*Result, error) {
 			res.Extracted = append(res.Extracted, fr.path)
 		}
 
-		if fr.ex.ParseErrors && len(fr.ex.Nodes) <= 1 {
+		if (fr.ex.ParseErrors && len(fr.ex.Nodes) <= 1) || fr.ex.ParseStop != "" {
 			res.SyntaxErrored = append(res.SyntaxErrored, fr.path)
 		}
 	}
@@ -167,7 +172,7 @@ func extractOne(path, root string, cache Cache) *model.Extraction {
 	}
 
 	ex := safeExtract(ext, path, root, src)
-	if cache != nil && ex.Error == "" && len(ex.Nodes) > 0 {
+	if cache != nil && ex.Error == "" && ex.ParseStop == "" && len(ex.Nodes) > 0 {
 		cache.Put(path, src, ex)
 	}
 
@@ -175,9 +180,22 @@ func extractOne(path, root string, cache Cache) *model.Extraction {
 }
 
 func safeExtract(ext Extractor, path, root string, src []byte) (out *model.Extraction) {
+	start := time.Now()
+
 	defer func() {
 		if r := recover(); r != nil {
-			out = &model.Extraction{Error: "panic during extraction"}
+			slog.Error("extractor panicked; the file is skipped", "path", path, "panic", r, "stack", string(debug.Stack()))
+			out = &model.Extraction{Error: fmt.Sprintf("panic during extraction: %v", r)}
+		}
+
+		// A parse that ran into its budget leaves a partial tree; say which
+		// file, since its missing declarations are otherwise silent.
+		if took := time.Since(start); took >= tsx.ParseBudget(len(src)) {
+			slog.Warn("parsing hit its time budget; the file is partially extracted",
+				"path", path, "bytes", len(src), "took", took.Round(time.Millisecond).String())
+			if out != nil {
+				out.ParseStop = "timeout"
+			}
 		}
 	}()
 

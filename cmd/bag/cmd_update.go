@@ -206,11 +206,18 @@ func hookBody(bin string) string {
 if [ -z "$BAG_SKIP_HOOK" ]; then
   root="$(git rev-parse --show-toplevel 2>/dev/null)"
   if [ -n "$root" ]; then
-    ( cd "$root" && %q update . --no-viz >/dev/null 2>&1 & )
+    ( cd "$root" && %s update . --no-viz >/dev/null 2>&1 & )
   fi
 fi
 %s
-`, hookBegin, bin, hookEnd)
+`, hookBegin, shellQuote(bin), hookEnd)
+}
+
+// shellQuote quotes s for a POSIX shell. Go's %q makes a double-quoted
+// string, inside which the shell still expands $ and backticks: a binary path
+// containing either would run as code from every git hook.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func runHook(_ context.Context, args []string) error {

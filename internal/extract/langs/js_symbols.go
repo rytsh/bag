@@ -550,7 +550,12 @@ func collectJSSymbolFacts(per []extract.FileResult) (*jsFacts, []string) {
 			continue
 		}
 
-		tree, err := tsx.Parse(jsGrammarFor(fr.Path), src)
+		grammar := jsGrammarFor(fr.Path)
+		if grammar == "typescript" {
+			grammar = tsx.TypeScriptGrammar(src)
+		}
+
+		tree, err := tsx.Parse(grammar, src)
 		if err != nil {
 			continue
 		}

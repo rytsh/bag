@@ -278,6 +278,30 @@ declarations and signatures without a body (interface methods, abstract
 members) have none. Analysis adds `community`, `norm_label`, `_origin` and
 `confidence_score`.
 
+A Go type is one node: its declaration, linked by `method` edges to every
+method declared on it in any file of the package, and the target of the
+package's unqualified references to it. A file whose canonical id would
+collide with a type of its package (type `Cart` in `cart/cart.go`) keeps its
+extension in the id (`cart_cart_go`).
+
+Calls are bound in a file only when the target is unambiguous there: a call
+through `self`/`this` goes to the caller's own class, a member call on any
+other value never binds to a top-level function, and a name defined more
+than once in the file is left to cross-file resolution instead of going to
+whichever definition came last. A nested class whose name is already taken
+in the file (Django's `class Meta` in every model) is scoped by its outer
+class; every other class keeps its id. On one node pair, containment never
+replaces a relation that says more (a nested class extending its outer
+class keeps `inherits`). A Rust `impl` block adds to its type
+(`impl<T> Point<T>` and `impl Display for Point<i32>` both belong to
+`Point`).
+
+Parsing has a time budget that grows with file size (5 s plus 50 µs per
+byte, at most a minute). A file that hits it is extracted from the partial
+tree and reported, and the passes that parse it again do not wait the whole
+budget a second time. A `.ts` file containing JSX is parsed with the TSX
+grammar.
+
 Node IDs follow Graphify's `normalize_id`/`make_id` recipe (casefold + NFKC to
 a fixpoint, Unicode `\w` runs), and the resolution and deduplication passes
 started as ports of Graphify's. bag no longer promises to match Graphify's

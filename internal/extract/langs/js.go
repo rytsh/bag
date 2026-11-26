@@ -601,7 +601,7 @@ func tsExtraWalk(x *generic.Ctx, n *tsx.Node, parentClass string) bool {
 
 			if name != "" {
 				id := ids.MakeID(b.Stem, name)
-				b.AddNode(id, name, n.Line())
+				b.AddNode(id, name, n.Line()).SetEndLine(n.EndLine())
 				b.AddEdge(b.FileID, id, "contains", n.Line())
 			}
 		}
@@ -1121,7 +1121,7 @@ func newJSConfig(lang, grammar string, tsx bool) *generic.Config {
 	if lang == "typescript" {
 		cfg.ClassTypes = base.NewSet("class_declaration", "abstract_class_declaration", "interface_declaration",
 			"enum_declaration", "type_alias_declaration")
-		cfg.FunctionTypes = cfg.FunctionTypes.Union("method_signature")
+		cfg.FunctionTypes = cfg.FunctionTypes.Union("method_signature", "abstract_method_signature")
 		cfg.CallTypes = base.NewSet("call_expression", "new_expression")
 
 		if tsx {
@@ -1143,8 +1143,13 @@ func ExtractJS(path, root string, src []byte) *model.Extraction {
 	return generic.Extract(jsConfig, path, root, src)
 }
 
-// ExtractTS extracts a TypeScript file.
+// ExtractTS extracts a TypeScript file. One that contains JSX is parsed as
+// TSX (see tsx.TypeScriptGrammar).
 func ExtractTS(path, root string, src []byte) *model.Extraction {
+	if tsx.TypeScriptGrammar(src) == "tsx" {
+		return generic.Extract(tsxConfig, path, root, src)
+	}
+
 	return generic.Extract(tsConfigG, path, root, src)
 }
 

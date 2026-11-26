@@ -234,6 +234,7 @@ func (e *Engine) hubThreshold() int {
 
 // Expand traverses from seeds up to depth hops (BFS or DFS).
 func (e *Engine) Expand(seeds []string, depth int, dfs bool) (map[string]bool, [][2]string) {
+	depth = clampOpt(depth, defaultDepth, MaxDepth)
 	hub := e.hubThreshold()
 	seedSet := map[string]bool{}
 
@@ -309,6 +310,10 @@ func (e *Engine) Expand(seeds []string, depth int, dfs bool) (map[string]bool, [
 				visited[n] = true
 			}
 
+			if len(next) == 0 {
+				break
+			}
+
 			frontier = next
 		}
 	}
@@ -319,7 +324,15 @@ func (e *Engine) Expand(seeds []string, depth int, dfs bool) (map[string]bool, [
 		have[[2]string{ed[1], ed[0]}] = true
 	}
 
+	// Sorted, so the same query always renders the same edges in the same
+	// order - and a truncated answer keeps the same ones.
+	order := make([]string, 0, len(visited))
 	for n := range visited {
+		order = append(order, n)
+	}
+	sort.Strings(order)
+
+	for _, n := range order {
 		for _, nb := range e.G.Neighbors(n) {
 			if visited[nb] && !have[[2]string{n, nb}] {
 				have[[2]string{n, nb}] = true
@@ -353,7 +366,7 @@ func (e *Engine) communityName(id string) string {
 
 // Render renders a subgraph as text within a token budget (≈3 chars/token).
 func (e *Engine) Render(nodes map[string]bool, edges [][2]string, budget int, seeds []string) string {
-	charBudget := budget * 3
+	charBudget := clampOpt(budget, defaultBudget, MaxBudget) * 3
 	seedSet := map[string]bool{}
 
 	var hits []string
@@ -474,19 +487,34 @@ type Options struct {
 	Seeds  int
 }
 
+// Bounds on a query. Depth is a traversal loop count and the budget is
+// multiplied into a byte count, so both come from callers that may pass
+// anything (an MCP client, a flag); out-of-range values are clamped rather
+// than trusted.
+const (
+	defaultDepth  = 2
+	MaxDepth      = 6
+	defaultBudget = 2000
+	MaxBudget     = 200_000
+	maxSeeds      = 50
+)
+
+func clampOpt(v, def, maxV int) int {
+	switch {
+	case v <= 0:
+		return def
+	case v > maxV:
+		return maxV
+	}
+
+	return v
+}
+
 // Query answers a natural-language question with a scoped subgraph.
 func (e *Engine) Query(question string, opt Options) string {
-	if opt.Depth == 0 {
-		opt.Depth = 2
-	}
-
-	if opt.Budget == 0 {
-		opt.Budget = 2000
-	}
-
-	if opt.Seeds == 0 {
-		opt.Seeds = 3
-	}
+	opt.Depth = clampOpt(opt.Depth, defaultDepth, MaxDepth)
+	opt.Budget = clampOpt(opt.Budget, defaultBudget, MaxBudget)
+	opt.Seeds = clampOpt(opt.Seeds, 3, maxSeeds)
 
 	scored := e.Score(strings.Fields(question))
 	if len(scored) == 0 {
@@ -543,6 +571,13 @@ func (e *Engine) Find(label string) []string {
 
 // Path returns the shortest path between two labels as text.
 func (e *Engine) Path(from, to string) string {
+	return e.PathWithin(from, to, 0)
+}
+
+// PathWithin is Path limited to maxHops hops (0: no limit). A longer path is
+// reported as such rather than printed: past a few hops it says little about
+// how the two are related.
+func (e *Engine) PathWithin(from, to string, maxHops int) string {
 	a, b := e.Find(from), e.Find(to)
 	if len(a) == 0 {
 		return fmt.Sprintf("No node matching %q.", from)
@@ -555,6 +590,11 @@ func (e *Engine) Path(from, to string) string {
 	p := e.ShortestPath(a[0], b[0])
 	if p == nil {
 		return fmt.Sprintf("No path between %s and %s.", e.G.Node(a[0]).Label, e.G.Node(b[0]).Label)
+	}
+
+	if maxHops > 0 && len(p)-1 > maxHops {
+		return fmt.Sprintf("The shortest path between %s and %s is %d hops, more than the %d asked for.",
+			e.G.Node(a[0]).Label, e.G.Node(b[0]).Label, len(p)-1, maxHops)
 	}
 
 	var sb strings.Builder

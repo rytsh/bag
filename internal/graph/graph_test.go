@@ -1,8 +1,11 @@
 package graph_test
 
 import (
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/rytsh/bag/internal/analyze"
 	"github.com/rytsh/bag/internal/cluster"
 	"github.com/rytsh/bag/internal/graph"
 	"github.com/rytsh/bag/internal/model"
@@ -133,16 +136,153 @@ func TestDedupeEntities(t *testing.T) {
 func TestBuildMergesAttributesForCollapsedEdgePair(t *testing.T) {
 	nodes := []*model.Node{node("a", "A", "a.py"), node("b", "B", "a.py")}
 	edges := []*model.Edge{
-		{Source: "a", Target: "b", Relation: "calls", Confidence: model.Extracted, SourceFile: "a.py", SourceLocation: "L2", Weight: 1, Context: "call", Extra: map[string]any{"type_only": true}},
-		{Source: "a", Target: "b", Relation: "contains", Confidence: model.Extracted, SourceFile: "a.py", SourceLocation: "L1", Weight: 1},
+		{Source: "a", Target: "b", Relation: "imports", Confidence: model.Extracted, SourceFile: "a.py", SourceLocation: "L2", Weight: 1, Context: "import", Extra: map[string]any{"type_only": true}},
+		{Source: "a", Target: "b", Relation: "uses", Confidence: model.Extracted, SourceFile: "a.py", SourceLocation: "L1", Weight: 1},
 	}
 
 	e := graph.Build(nodes, edges, nil, "").Edge("a", "b")
-	if e == nil || e.Relation != "contains" || e.SourceLocation != "L1" {
+	if e == nil || e.Relation != "imports" || e.SourceLocation != "L2" {
 		t.Fatalf("unexpected collapsed edge: %+v", e)
 	}
 
-	if e.Context != "call" || e.Extra["type_only"] != true {
+	if e.Context != "import" || e.Extra["type_only"] != true {
 		t.Fatalf("missing retained attributes: %+v", e)
+	}
+}
+
+// Containment is implied by location: on a pair it never replaces a
+// relation that says more (a function calling the local function it
+// declares, a nested class extending its outer class).
+func TestBuildKeepsTheRelationOverContainment(t *testing.T) {
+	nodes := []*model.Node{node("a", "A", "a.py"), node("b", "B", "a.py")}
+	edges := []*model.Edge{
+		{Source: "a", Target: "b", Relation: "calls", Confidence: model.Extracted, SourceFile: "a.py", SourceLocation: "L2", Weight: 1, Context: "call"},
+		{Source: "a", Target: "b", Relation: "contains", Confidence: model.Extracted, SourceFile: "a.py", SourceLocation: "L1", Weight: 1},
+	}
+
+	if e := graph.Build(nodes, edges, nil, "").Edge("a", "b"); e == nil || e.Relation != "calls" {
+		t.Fatalf("collapsed edge = %+v, want the call", e)
+	}
+}
+
+// Edges() is the order every unsorted output (reports, exports, questions)
+// inherits, so it must not depend on map iteration.
+func TestEdgesOrderIsStable(t *testing.T) {
+	var nodes []*model.Node
+	var edges []*model.Edge
+	nodes = append(nodes, node("hub", "Hub", "h.go"))
+	for i := range 40 {
+		id := "n" + string(rune('a'+i%26)) + string(rune('a'+i/26))
+		nodes = append(nodes, node(id, id, "h.go"))
+		edges = append(edges, edge("hub", id, "calls"))
+	}
+	g := graph.Build(nodes, edges, nil, "")
+
+	key := func() string {
+		var b strings.Builder
+		for _, e := range g.Edges() {
+			b.WriteString(e.Source + ">" + e.Target + ";")
+		}
+
+		return b.String()
+	}
+
+	want := key()
+	for range 30 {
+		if got := key(); got != want {
+			t.Fatal("Edges() order changed between calls")
+		}
+	}
+	if g.NumEdges() != 40 {
+		t.Errorf("NumEdges = %d, want 40", g.NumEdges())
+	}
+
+	g.RemoveNode("hub")
+	if g.NumEdges() != 0 || len(g.Edges()) != 0 {
+		t.Errorf("after removing the hub: NumEdges = %d, Edges = %d", g.NumEdges(), len(g.Edges()))
+	}
+}
+
+// Caller-supplied sizes are clamped: a huge budget overflowed into a negative
+// slice bound, a huge depth spun for ever, and the output order of a query
+// must not change between runs.
+func TestQueryBoundsAndDeterminism(t *testing.T) {
+	g := buildSample()
+	e := query.New(g, nil, nil)
+
+	done := make(chan string, 1)
+	go func() {
+		done <- e.Query("X", query.Options{Depth: 1 << 31, Budget: 1 << 62})
+	}()
+	select {
+	case out := <-done:
+		if out == "" {
+			t.Fatal("empty answer")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("a huge depth did not finish")
+	}
+
+	if out := e.Query("X", query.Options{Budget: -1}); out == "" {
+		t.Fatal("empty answer for a negative budget")
+	}
+
+	want := e.Query("X", query.Options{})
+	for range 20 {
+		if got := e.Query("X", query.Options{}); got != want {
+			t.Fatal("query output changed between runs")
+		}
+	}
+}
+
+// A hub percentile above 100 is clamped, not an index past the end.
+func TestHubPercentileAboveHundred(t *testing.T) {
+	g := buildSample()
+	_ = cluster.Cluster(g, cluster.Options{ExcludeHubsPercent: 150})
+}
+
+func TestGodNodesPercentileAboveHundred(t *testing.T) {
+	_ = analyze.GodNodes(buildSample(), 10, 150)
+}
+
+// Loading a graph and writing it again keeps integers integers.
+func TestLoadWriteKeepsIntegers(t *testing.T) {
+	g := graph.New()
+	g.AddNode(&model.Node{ID: "a", Label: "A", FileType: model.FileTypeCode, SourceFile: "a.rs", SourceLocation: "L1",
+		Metadata: map[string]any{"line": 7, "ratio": 0.5}, Extra: map[string]any{"_rust_declaration_count": 1}})
+
+	first, err := g.MarshalGraphJSON(graph.WriteOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := graph.Parse(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := loaded.G.MarshalGraphJSON(graph.WriteOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(first) != string(second) {
+		t.Errorf("round trip changed the graph:\n%s\n---\n%s", first, second)
+	}
+}
+
+// A hyperedge member merged into a duplicate stays a member, as the node it
+// was merged into.
+func TestHyperedgeFollowsMergedMembers(t *testing.T) {
+	nodes := []*model.Node{
+		{ID: "doc_rate_limiter", Label: "Rate Limiter", FileType: "concept", SourceFile: "a.md"},
+		{ID: "doc_rate_limiter_c2", Label: "Rate Limiter", FileType: "concept", SourceFile: "b.md"},
+		{ID: "doc_cache", Label: "Cache", FileType: "concept", SourceFile: "a.md"},
+	}
+	hyper := []*model.Hyperedge{{ID: "h", Label: "flow", Relation: "flow", Nodes: []string{"doc_rate_limiter_c2", "doc_cache"}}}
+
+	g := graph.Build(nodes, nil, hyper, "")
+	if len(g.Hyperedges) != 1 || len(g.Hyperedges[0].Nodes) != 2 {
+		t.Fatalf("hyperedges = %+v, want both members", g.Hyperedges)
 	}
 }

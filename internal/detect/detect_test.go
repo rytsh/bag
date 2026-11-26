@@ -91,3 +91,82 @@ func TestIgnoreNegation(t *testing.T) {
 		}
 	}
 }
+
+// A file link pointing outside the root is not read unless links are
+// followed, and a link to a credential file is skipped whatever its name.
+func TestFileSymlinksOutsideTheRoot(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "repo")
+	write(t, root, "main.go", "package main")
+	write(t, base, "outside/secret.txt", "s3cret")
+	write(t, base, ".aws/credentials", "key")
+	write(t, root, "docs/real.md", "# in root")
+
+	for link, target := range map[string]string{
+		"notes.txt": filepath.Join(base, "outside", "secret.txt"),
+		"aws.md":    filepath.Join(base, ".aws", "credentials"),
+		"alias.md":  filepath.Join(root, "docs", "real.md"),
+	} {
+		if err := os.Symlink(target, filepath.Join(root, link)); err != nil {
+			t.Skip("symlinks unsupported:", err)
+		}
+	}
+
+	res, err := Detect(root, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	all := map[string]bool{}
+	for _, files := range res.Files {
+		for _, f := range files {
+			all[filepath.Base(f)] = true
+		}
+	}
+
+	if all["notes.txt"] || all["aws.md"] {
+		t.Errorf("a link out of the root was read: %v", all)
+	}
+	if !all["alias.md"] {
+		t.Errorf("a link inside the root was dropped: %v", all)
+	}
+
+	followed, err := Detect(root, Options{FollowSymlinks: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, files := range followed.Files {
+		for _, f := range files {
+			if filepath.Base(f) == "aws.md" {
+				t.Error("a link to a credential store was read with FollowSymlinks")
+			}
+		}
+	}
+}
+
+// The output directory is skipped even when the root is reached through a
+// symlink and the output is given through it.
+func TestOutDirUnderASymlinkedRoot(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	write(t, real, "main.go", "package main")
+	write(t, real, "graphdocs/GRAPH_REPORT.md", "# report")
+
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skip("symlinks unsupported:", err)
+	}
+
+	res, err := Detect(link, Options{OutDir: filepath.Join(link, "graphdocs")})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, files := range res.Files {
+		for _, f := range files {
+			if filepath.Base(f) == "GRAPH_REPORT.md" {
+				t.Fatalf("the output directory was scanned: %s", f)
+			}
+		}
+	}
+}

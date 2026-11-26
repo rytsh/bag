@@ -397,15 +397,36 @@ func ToWiki(in WikiInput, outDir string) (int, error) {
 
 	produced["index.md"] = true
 
-	entries, _ := os.ReadDir(outDir)
-	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), ".md") && !produced[e.Name()] {
-			_ = os.Remove(filepath.Join(outDir, e.Name()))
+	// Only pages an earlier wiki export wrote are stale and removed; the
+	// manifest lists them. Any other Markdown in the directory (a README, the
+	// user's own docs when --out points at them) is not bag's to delete.
+	manifest := filepath.Join(outDir, wikiManifest)
+	if prev, err := os.ReadFile(manifest); err == nil {
+		for _, name := range strings.Split(string(prev), "\n") {
+			name = strings.TrimSpace(name)
+			if name == "" || produced[name] || name != filepath.Base(name) || !strings.HasSuffix(name, ".md") {
+				continue
+			}
+
+			_ = os.Remove(filepath.Join(outDir, name))
 		}
+	}
+
+	names := make([]string, 0, len(produced))
+	for name := range produced {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	if err := graph.WriteFileAtomic(manifest, []byte(strings.Join(names, "\n")+"\n")); err != nil {
+		return count, err
 	}
 
 	return count, nil
 }
+
+// wikiManifest lists the pages the last wiki export wrote into a directory.
+const wikiManifest = ".bag_wiki_manifest"
 
 func communityArticle(g *graph.Graph, cid int, nodes []string, label func(int) string, cohesion map[int]float64,
 	nc map[string]int, resolver map[string]string,

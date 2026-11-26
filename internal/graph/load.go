@@ -3,6 +3,7 @@ package graph
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 
 	"github.com/rytsh/bag/internal/model"
@@ -35,6 +36,36 @@ func Load(path string) (*Loaded, error) {
 	}
 
 	return Parse(raw)
+}
+
+// restoreInts turns the whole-number floats encoding/json decodes every
+// number into back into ints, recursively. Without it a graph that is loaded
+// and written again (cluster-only, the MCP server) rewrites
+// "_rust_declaration_count": 1 as 1.0 and {"line": 7} as 7.0, changing keys
+// that are meant to be stable.
+func restoreInts(v any) any {
+	switch x := v.(type) {
+	case float64:
+		if x == math.Trunc(x) && math.Abs(x) < 1<<53 {
+			return int(x)
+		}
+
+		return x
+	case map[string]any:
+		for k, e := range x {
+			x[k] = restoreInts(e)
+		}
+
+		return x
+	case []any:
+		for i, e := range x {
+			x[i] = restoreInts(e)
+		}
+
+		return x
+	}
+
+	return v
 }
 
 // Parse decodes graph.json bytes.
@@ -76,7 +107,7 @@ func Parse(raw []byte) (*Loaded, error) {
 		}
 
 		if md, ok := m["metadata"].(map[string]any); ok {
-			n.Metadata = md
+			n.Metadata = restoreInts(md).(map[string]any)
 		}
 
 		for k, v := range m {
@@ -85,7 +116,7 @@ func Parse(raw []byte) (*Loaded, error) {
 					n.Extra = map[string]any{}
 				}
 
-				n.Extra[k] = v
+				n.Extra[k] = restoreInts(v)
 			}
 		}
 
@@ -128,7 +159,7 @@ func Parse(raw []byte) (*Loaded, error) {
 		}
 
 		if md, ok := m["metadata"].(map[string]any); ok {
-			e.Metadata = md
+			e.Metadata = restoreInts(md).(map[string]any)
 		}
 
 		for k, v := range m {
@@ -137,7 +168,7 @@ func Parse(raw []byte) (*Loaded, error) {
 					e.Extra = map[string]any{}
 				}
 
-				e.Extra[k] = v
+				e.Extra[k] = restoreInts(v)
 			}
 		}
 
@@ -168,7 +199,7 @@ func Parse(raw []byte) (*Loaded, error) {
 					h.Extra = map[string]any{}
 				}
 
-				h.Extra[k] = v
+				h.Extra[k] = restoreInts(v)
 			}
 		}
 

@@ -121,7 +121,7 @@ func Detect(root string, opt Options) (*Result, error) {
 
 	outAbs := ""
 	if opt.OutDir != "" {
-		outAbs, _ = filepath.Abs(opt.OutDir)
+		outAbs = resolveExisting(opt.OutDir)
 	}
 
 	var walk func(dir string, ign *ignoreSet) error
@@ -155,6 +155,30 @@ func Detect(root string, opt Options) (*Result, error) {
 				isDir = st.IsDir()
 				if isDir && !opt.FollowSymlinks {
 					continue
+				}
+
+				// A file link is read through. Unless links are followed, its
+				// target must be inside the root: a link named notes.md to
+				// ~/.aws/credentials would otherwise be indexed (and, with
+				// --semantic, sent to a model). The sensitive-name check then
+				// looks at the target's name as well as the link's.
+				if !isDir {
+					target, err := filepath.EvalSymlinks(full)
+					if err != nil {
+						continue
+					}
+
+					if !opt.FollowSymlinks && !within(root, target) {
+						res.Skipped = append(res.Skipped, rel)
+
+						continue
+					}
+
+					if isSensitive(filepath.ToSlash(target)) {
+						res.Skipped = append(res.Skipped, rel)
+
+						continue
+					}
 				}
 			}
 
@@ -242,6 +266,43 @@ func Classify(path string, isCode func(string) bool) (FileType, bool) {
 	}
 
 	return "", false
+}
+
+// within reports whether path is root or lies under it. Both are resolved
+// paths.
+func within(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// resolveExisting returns p absolute with symlinks resolved, as far as it
+// exists: the output directory may not exist yet on a first build, but the
+// root it is compared against is always resolved.
+func resolveExisting(p string) string {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return p
+	}
+
+	var tail []string
+	for cur := abs; ; {
+		if r, err := filepath.EvalSymlinks(cur); err == nil {
+			for i := len(tail) - 1; i >= 0; i-- {
+				r = filepath.Join(r, tail[i])
+			}
+
+			return r
+		}
+
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return abs
+		}
+
+		tail = append(tail, filepath.Base(cur))
+		cur = parent
+	}
 }
 
 func isSensitive(rel string) bool {

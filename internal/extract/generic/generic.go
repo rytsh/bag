@@ -132,9 +132,13 @@ type Ctx struct {
 	// current class (Ruby).
 	SingletonDepth int
 
-	bodies       []body
-	caller       string
-	parentOf     map[string]string
+	bodies     []body
+	caller     string
+	parentOf   map[string]string
+	classOuter map[string]string
+	// classScope records the enclosing class ("" at top level) each class id
+	// was first declared in.
+	classScope   map[string]string
 	emitIndirect func(ref IndirectRef, scope string, locals map[string]bool)
 	callable     map[string]bool
 	callableCls  map[string]bool
@@ -375,6 +379,20 @@ func run(cfg *Config, path, root string, tree *tsx.Tree) *model.Extraction {
 			}
 
 			classID := ids.MakeID(b.Stem, strings.Join(x.NamespaceStack, "."), className)
+			// A nested class whose plain id another class already took
+			// (Django's class Meta in every model) is scoped by its outer
+			// class, so the two stay apart. Only a collision changes the
+			// id, which keeps the ids of every other class stable. A class
+			// reopened in the same scope (Ruby, C# partial) keeps its id.
+			if x.classScope == nil {
+				x.classScope = map[string]string{}
+			}
+			if owner, taken := x.classScope[classID]; taken && owner != parentClass && parentClass != "" && cfg.QualifyClassName == nil {
+				classID = ids.MakeID(parentClass, className)
+			}
+			if _, ok := x.classScope[classID]; !ok {
+				x.classScope[classID] = parentClass
+			}
 			line := n.Line()
 			reopened := b.Has(classID)
 			b.AddNode(classID, className, line).SetEndLine(n.EndLine())
@@ -464,6 +482,17 @@ func run(cfg *Config, path, root string, tree *tsx.Tree) *model.Extraction {
 			return
 		}
 
+		// A class body's own statements (if TYPE_CHECKING:, try:, #if, with)
+		// still declare members of the class; only a function body ends it,
+		// and functions are handled above.
+		if parentClass != "" && classBodyStatements.Has(t) {
+			for _, c := range n.Children() {
+				walk(c, parentClass)
+			}
+
+			return
+		}
+
 		for _, c := range n.Children() {
 			walk(c, "")
 		}
@@ -498,11 +527,21 @@ func run(cfg *Config, path, root string, tree *tsx.Tree) *model.Extraction {
 
 // WalkFunctionNamed emits a function/method node for n with the given name.
 func (x *Ctx) WalkFunctionNamed(n *tsx.Node, parentClass, funcName string) string {
+	return x.WalkFunctionNamedID(n, parentClass, funcName, "")
+}
+
+// WalkFunctionNamedID is WalkFunctionNamed with the id built from idName
+// instead of the label's name, for members whose name has no id-safe
+// characters to tell them apart (a C# finalizer ~P beside the constructor P).
+func (x *Ctx) WalkFunctionNamedID(n *tsx.Node, parentClass, funcName, idName string) string {
 	cfg, b := x.Cfg, x.B
 
 	sanitized := funcName
 	if cfg.SanitizeName != nil {
 		sanitized = cfg.SanitizeName(funcName)
+	}
+	if idName != "" {
+		sanitized = idName
 	}
 
 	if ids.NormalizeID(sanitized) == "" {
@@ -576,6 +615,9 @@ func walkCalls(x *Ctx) {
 	b := x.B
 
 	labelToID := map[string]string{}
+	// byLabel keeps every definition of a bare name in the file, so a call
+	// can be bound only when the name is unambiguous where it is made.
+	byLabel := map[string][]string{}
 
 	for _, n := range b.Nodes {
 		if n.Type == "namespace" {
@@ -583,6 +625,10 @@ func walkCalls(x *Ctx) {
 		}
 
 		norm := strings.TrimLeft(strings.Trim(n.Label, "()"), ".")
+		if n.SourceFile != "" && x.callable[n.ID] {
+			byLabel[norm] = append(byLabel[norm], n.ID)
+		}
+
 		if _, nested := x.ScopeParents[n.ID]; nested {
 			if _, ok := labelToID[norm]; !ok {
 				labelToID[norm] = n.ID
@@ -592,6 +638,70 @@ func walkCalls(x *Ctx) {
 		}
 
 		labelToID[norm] = n.ID
+	}
+
+	// bindInFile picks the in-file target of a direct call, or "" to leave it
+	// to cross-file resolution. A call through self/this means the caller's
+	// own class (or the class nesting it); any other member call (obj.run())
+	// can only be bound when the file has a single method of that name, and
+	// never to a top-level function; a bare call never binds to a method of
+	// another class. Names defined more than once are not guessed.
+	isMethod := func(id string) bool {
+		_, ok := x.parentOf[id]
+
+		return ok && x.parentOf[id] != ""
+	}
+	bindInFile := func(caller, callee string, member bool, receiver string) string {
+		cands := byLabel[callee]
+		if len(cands) == 0 {
+			return labelToID[callee]
+		}
+
+		// The caller's own class, then the classes nesting it: what self/this
+		// means, and what a bare call means first in languages with an
+		// implicit receiver (Ruby, Kotlin, Java, C#, Swift).
+		ownMethod := func() string {
+			for cls := x.parentOf[caller]; cls != ""; cls = x.classParent(cls) {
+				for _, c := range cands {
+					if x.parentOf[c] == cls {
+						return c
+					}
+				}
+			}
+
+			return ""
+		}
+
+		if member && isSelfReceiver(receiver) {
+			return ownMethod()
+		}
+
+		if !member && cfg.Lang != "python" {
+			if c := ownMethod(); c != "" {
+				return c
+			}
+		}
+
+		var pick []string
+		for _, c := range cands {
+			switch {
+			case member && isMethod(c):
+				pick = append(pick, c)
+			case !member && !isMethod(c):
+				// A top-level function, or a class (a constructor call).
+				pick = append(pick, c)
+			case !member && cfg.Lang != "python":
+				// Implicit receiver: a method inherited from a class in this
+				// file is a fair guess when it is the only one.
+				pick = append(pick, c)
+			}
+		}
+
+		if len(pick) == 1 {
+			return pick[0]
+		}
+
+		return ""
 	}
 
 	nidSourced := func(id string) bool {
@@ -737,7 +847,7 @@ func walkCalls(x *Ctx) {
 					}
 
 					if tgt == "" {
-						tgt = labelToID[callee]
+						tgt = bindInFile(caller, callee, member, receiver)
 					}
 
 					if tgt != "" && !nidSourced(tgt) && cfg.DeferStubTarget != nil && cfg.DeferStubTarget(n) {
@@ -852,6 +962,40 @@ func DefaultCallName(cfg *Config, n *tsx.Node) (string, bool, string) {
 	}
 
 	return fn.Text(), false, ""
+}
+
+// classBodyStatements are the statement and block nodes that can wrap member
+// declarations directly in a class body.
+var classBodyStatements = base.NewSet(
+	"if_statement", "elif_clause", "else_clause", "try_statement", "except_clause",
+	"except_group_clause", "finally_clause", "with_statement", "block",
+	"preproc_if", "preproc_ifdef", "preproc_else", "preproc_elif",
+)
+
+// isSelfReceiver reports whether a member call's receiver is the instance or
+// class the caller runs in.
+func isSelfReceiver(r string) bool {
+	switch r {
+	case "self", "this", "cls", "Self", "@", "$this", "static":
+		return true
+	}
+
+	return false
+}
+
+// classParent returns the class a nested class is declared in, from its
+// contains edge, or "".
+func (x *Ctx) classParent(cls string) string {
+	if x.classOuter == nil {
+		x.classOuter = map[string]string{}
+		for _, e := range x.B.Edges {
+			if e.Relation == "contains" && x.callableCls[e.Target] && x.callableCls[e.Source] {
+				x.classOuter[e.Target] = e.Source
+			}
+		}
+	}
+
+	return x.classOuter[cls]
 }
 
 func isUpper(s string) bool {

@@ -19,6 +19,21 @@ type corpus struct {
 	nodes    []*model.Node
 	edges    []*model.Edge
 	rawCalls []*model.RawCall
+
+	// fileIDs holds the file node id canonicalizeFileIDs chose for a
+	// root-relative path when it is not base.FileNodeID's (a Go file named
+	// like a type of its package). Later passes resolve file ids through
+	// fileID so they agree with it.
+	fileIDs map[string]string
+}
+
+// fileID returns the canonical file node id for a root-relative path.
+func (c *corpus) fileID(rel string) string {
+	if id, ok := c.fileIDs[rel]; ok {
+		return id
+	}
+
+	return base.FileNodeID(rel)
 }
 
 func resolve(root string, per []fileResult, res *Result) {
@@ -37,10 +52,13 @@ func resolve(root string, per []fileResult, res *Result) {
 	c.runSymbolResolvers()
 	c.mergeDeclDefClasses()
 	c.canonicalizeFileIDs()
+	receivers := c.foldGoReceivers()
 	c.disambiguateCollidingIDs()
+	c.repointGoReceiverEdges(receivers)
 	c.canonicalizeCSharpNamespaces()
 	c.runTypeResolvers()
 	c.resolveGoTypeReferences()
+	c.resolveGoPackageTypeStubs()
 	c.runPreRewireResolvers()
 	c.rewireUniqueStubs()
 	c.runPostRewireResolvers()
@@ -59,6 +77,34 @@ func (c *corpus) canonicalizeFileIDs() {
 	idRemap := map[string]string{}
 	prefixRemap := map[string][2]string{}
 
+	// A Go symbol id is scoped by its package directory, not its file, so
+	// type Cart in cart/cart.go is "cart_cart": the very id the file node
+	// canonicalizes to. The type can be declared, or only have methods, in
+	// any file of the directory, so the ids are collected per directory.
+	// Keeping both lost the file node and left a contains-loop on the type;
+	// such a file node keeps its extension instead.
+	dirSymbolIDs := map[string]map[string]bool{}
+
+	for _, fr := range c.per {
+		if fr.ex == nil || !strings.HasSuffix(fr.path, ".go") {
+			continue
+		}
+
+		dir := filepath.Dir(fr.path)
+		own := ids.MakeID(fr.path)
+
+		for _, n := range fr.ex.Nodes {
+			if n.ID == own || n.SourceFile == "" {
+				continue
+			}
+
+			if dirSymbolIDs[dir] == nil {
+				dirSymbolIDs[dir] = map[string]bool{}
+			}
+			dirSymbolIDs[dir][n.ID] = true
+		}
+	}
+
 	for _, fr := range c.per {
 		if fr.ex == nil {
 			continue
@@ -70,12 +116,20 @@ func (c *corpus) canonicalizeFileIDs() {
 		}
 
 		newID := base.FileNodeID(rel)
+		if strings.HasSuffix(fr.path, ".go") && dirSymbolIDs[filepath.Dir(fr.path)][newID] {
+			newID = ids.MakeID(rel)
+			if c.fileIDs == nil {
+				c.fileIDs = map[string]string{}
+			}
+			c.fileIDs[rel] = newID
+		}
+
 		if old := ids.MakeID(fr.path); old != newID {
 			idRemap[old] = newID
 		}
 
-		if oldPref := base.FileNodeID(fr.path); oldPref != newID {
-			prefixRemap[fr.path] = [2]string{oldPref, newID}
+		if oldPref := base.FileNodeID(fr.path); oldPref != base.FileNodeID(rel) {
+			prefixRemap[fr.path] = [2]string{oldPref, base.FileNodeID(rel)}
 		}
 	}
 
@@ -743,7 +797,7 @@ func (c *corpus) resolveCalls() {
 		if f, ok := sfToFile[n.SourceFile]; ok {
 			nidToFile[n.ID] = f
 		} else if rel := relPath(c.root, n.SourceFile); rel != "" {
-			nidToFile[n.ID] = base.FileNodeID(rel)
+			nidToFile[n.ID] = c.fileID(rel)
 		}
 	}
 
@@ -946,7 +1000,7 @@ func (c *corpus) relativize() {
 		var e entry
 
 		if rel := relPath(c.root, sf); rel != "" {
-			e.sf, e.canonical = rel, base.FileNodeID(rel)
+			e.sf, e.canonical = rel, c.fileID(rel)
 		} else {
 			e.sf = portableOutOfRoot(c.root, sf)
 			e.canonical = ids.MakeID("ext", e.sf)

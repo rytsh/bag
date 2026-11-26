@@ -63,9 +63,8 @@ func Cluster(g *graph.Graph, opt Options) graph.Communities {
 		sort.Ints(degs)
 
 		idx := int(float64(len(degs))*opt.ExcludeHubsPercent/100) - 1
-		if idx < 0 {
-			idx = 0
-		}
+		// A percentile above 100 (a client, a flag) would index past the end.
+		idx = min(max(idx, 0), len(degs)-1)
 
 		th := degs[idx]
 		for _, n := range ids {
@@ -295,13 +294,19 @@ func CohesionScore(g *graph.Graph, members []string) float64 {
 		in[m] = true
 	}
 
-	actual := 0
+	// Each internal edge is seen once from each end; only the members'
+	// neighbours are visited, not every edge of the graph per community.
+	ends := 0
 
-	for _, e := range g.Edges() {
-		if e.Source != e.Target && in[e.Source] && in[e.Target] {
-			actual++
+	for m := range in {
+		for _, nb := range g.Neighbors(m) {
+			if nb != m && in[nb] {
+				ends++
+			}
 		}
 	}
+
+	actual := ends / 2
 
 	possible := float64(n*(n-1)) / 2
 

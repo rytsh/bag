@@ -414,10 +414,62 @@ func csClassHook(x *generic.Ctx, n *tsx.Node, classID string, line int) {
 	}
 }
 
+// csLocalFunctions emits the local functions declared in a member's body as
+// nodes scoped to it, so a call to one from the member (or from a sibling
+// local function) binds to it lexically, as in Python.
+func csLocalFunctions(x *generic.Ctx, member *tsx.Node, memberID string) {
+	body := x.Cfg.FindBody(member)
+	if body == nil {
+		return
+	}
+
+	if x.ScopeParents == nil {
+		x.ScopeParents = map[string]string{}
+	}
+	if x.LexicalScope == nil {
+		x.LexicalScope = map[string]map[string]string{}
+	}
+
+	var walk func(n *tsx.Node)
+	walk = func(n *tsx.Node) {
+		for _, c := range n.Children() {
+			switch c.Type() {
+			case "local_function_statement":
+				nn := c.Field("name")
+				if nn == nil || nn.Text() == "" {
+					continue
+				}
+
+				name := nn.Text()
+				id := ids.MakeID(memberID, name)
+				x.B.AddNode(id, name+"()", c.Line()).SetEndLine(c.EndLine())
+				x.B.AddEdge(memberID, id, "contains", c.Line())
+				x.MarkCallable(id, false)
+				x.ScopeParents[id] = memberID
+				if x.LexicalScope[memberID] == nil {
+					x.LexicalScope[memberID] = map[string]string{}
+				}
+				x.LexicalScope[memberID][name] = id
+
+				if bd := x.Cfg.FindBody(c); bd != nil {
+					x.AddBody(id, bd)
+				}
+				csLocalFunctions(x, c, id)
+			case "lambda_expression", "anonymous_method_expression":
+				// Their own locals; walking them is the call pass's job.
+			default:
+				walk(c)
+			}
+		}
+	}
+	walk(body)
+}
+
 func csFunctionHook(x *generic.Ctx, n *tsx.Node, funcID string, line int) {
 	tps := csTypeParams(n)
 
 	csRecordMethodScope(x, n, funcID)
+	csLocalFunctions(x, n, funcID)
 
 	if params := n.Field("parameters"); params != nil {
 		for _, p := range params.Children() {
@@ -466,6 +518,42 @@ func csExtraWalk(x *generic.Ctx, n *tsx.Node, parentClass string) bool {
 	b := x.B
 
 	switch n.Type() {
+	case "constructor_declaration", "destructor_declaration", "operator_declaration", "conversion_operator_declaration":
+		// Members without a method_declaration node. Their calls are the
+		// object's set-up and tear-down, and were lost with them.
+		if parentClass == "" {
+			return false
+		}
+
+		name := ""
+		switch n.Type() {
+		case "constructor_declaration":
+			if nn := n.Field("name"); nn != nil {
+				name = nn.Text()
+			}
+		case "destructor_declaration":
+			if nn := n.Field("name"); nn != nil {
+				// "~" does not survive into an id; a finalizer would
+				// otherwise share the constructor's.
+				id := x.WalkFunctionNamedID(n, parentClass, "~"+nn.Text(), "finalize")
+
+				return id != ""
+			}
+		default:
+			if op := n.Field("operator"); op != nil {
+				name = "operator " + op.Text()
+			} else {
+				name = "operator"
+			}
+		}
+
+		if name == "" {
+			return true
+		}
+
+		x.WalkFunctionNamed(n, parentClass, name)
+
+		return true
 	case "enum_member_declaration":
 		if parentClass == "" {
 			return false
@@ -578,8 +666,16 @@ func csExtraWalk(x *generic.Ctx, n *tsx.Node, parentClass string) bool {
 		if nn := n.Field("name"); nn != nil && nn.Text() != "" {
 			pid := ids.MakeID(parentClass, nn.Text())
 			if !b.Has(pid) {
-				b.AddNode(pid, nn.Text(), n.Line())
+				b.AddNode(pid, nn.Text(), n.Line()).SetEndLine(n.EndLine())
 				b.AddEdgeCtx(parentClass, pid, "defines", n.Line(), "field")
+			}
+
+			// The accessors' code runs as the property: its calls are the
+			// property's (get { return Calc(); }).
+			for _, c := range n.Children() {
+				if c.Type() == "accessor_list" || c.Type() == "arrow_expression_clause" {
+					x.AddBody(pid, c)
+				}
 			}
 		}
 
@@ -711,13 +807,17 @@ var csharpConfig = &generic.Config{
 	CallAccessorTypes: base.NewSet("member_access_expression"),
 	CallAccessorField: "name",
 	BodyFallback:      []string{"declaration_list"},
-	FunctionBoundary:  base.NewSet("method_declaration"),
-	ImportHandler:     csImport,
-	ClassHook:         csClassHook,
-	FunctionHook:      csFunctionHook,
-	ExtraWalk:         csExtraWalk,
-	CallName:          csCallName,
-	DecorateRawCall:   csDecorateRawCall,
+	// Members with their own node stop the walk of the enclosing body. A
+	// property's accessor_list is registered as a body itself, so it is not
+	// a boundary: it is only reached from its property.
+	FunctionBoundary: base.NewSet("method_declaration", "local_function_statement", "constructor_declaration",
+		"destructor_declaration", "operator_declaration", "conversion_operator_declaration"),
+	ImportHandler:   csImport,
+	ClassHook:       csClassHook,
+	FunctionHook:    csFunctionHook,
+	ExtraWalk:       csExtraWalk,
+	CallName:        csCallName,
+	DecorateRawCall: csDecorateRawCall,
 	DeferStubTarget: func(n *tsx.Node) bool {
 		if n.Type() != "object_creation_expression" {
 			return false

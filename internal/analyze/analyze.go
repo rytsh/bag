@@ -135,9 +135,8 @@ func GodNodes(g *graph.Graph, topN int, excludeHubsPercent float64) []GodNode {
 
 		if len(degs) > 0 {
 			idx := int(float64(len(degs))*excludeHubsPercent/100) - 1
-			if idx < 0 {
-				idx = 0
-			}
+			// A percentile above 100 (a client, a flag) would index past the end.
+			idx = min(max(idx, 0), len(degs)-1)
 
 			threshold = degs[idx]
 		}

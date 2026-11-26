@@ -25,7 +25,7 @@ type BuildOptions struct {
 	OutDir string
 	// Excludes are additional gitignore-style patterns anchored at Root.
 	Excludes []string
-	// Workers bounds concurrent file extraction. Zero uses GOMAXPROCS.
+	// Workers bounds concurrent file extraction. Zero uses one per CPU.
 	Workers int
 	// Resolution controls community granularity. Zero uses the clustering
 	// implementation's default.
